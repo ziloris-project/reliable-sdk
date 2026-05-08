@@ -1,0 +1,39 @@
+{
+    "name": "@reliableapp/react",
+    "version": "1.0.2",
+    "description": "Reliable browser SDK — React bindings (Provider, ErrorBoundary, hooks, router).",
+    "type": "module",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.cjs"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "sideEffects": false,
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "typecheck": "tsc --noEmit",
+        "clean": "rm -rf dist"
+    },
+    "dependencies": {
+        "@reliableapp/frontend-core": "^1.0.2"
+    },
+    "peerDependencies": {
+        "react": ">=18"
+    },
+    "devDependencies": {
+        "@types/react": "^18.2.0",
+        "react": "^18.2.0"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

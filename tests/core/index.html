@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@reliable/core — test harness</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f8fafc;
+            --fg: #0f172a;
+            --muted: #64748b;
+            --border: #e2e8f0;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 24px;
+            font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+        }
+        header { max-width: 820px; margin: 0 auto 16px; }
+        h1 { margin: 0 0 4px; font-size: 20px; }
+        .sub { color: var(--muted); font-size: 13px; }
+        .card {
+            max-width: 820px;
+            margin: 12px auto;
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 18px;
+        }
+        .card h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+        .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .kv { display: grid; grid-template-columns: 140px 1fr; gap: 4px 12px; font-size: 13px; }
+        .kv dt { color: var(--muted); }
+        .kv dd { margin: 0; font-family: ui-monospace, "SF Mono", Consolas, monospace; word-break: break-all; }
+        button {
+            background: var(--fg);
+            color: #fff;
+            border: 0;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font: inherit;
+            cursor: pointer;
+        }
+        button.secondary { background: #fff; color: var(--fg); border: 1px solid var(--border); }
+        #log {
+            max-width: 820px;
+            margin: 12px auto;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 14px 16px;
+            border-radius: 10px;
+            font-family: ui-monospace, "SF Mono", Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.55;
+            max-height: 420px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .line-ok { color: #34d399; }
+        .line-err { color: #f87171; }
+        .line-info { color: #60a5fa; }
+        .line-dim { color: #64748b; }
+        .pill {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-weight: 600;
+        }
+        .pill.ok  { background: #dcfce7; color: #065f46; }
+        .pill.err { background: #fee2e2; color: #991b1b; }
+        .pill.idle { background: #e2e8f0; color: #334155; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>@reliable/core <span id="status" class="pill idle">idle</span></h1>
+        <div class="sub">Provide a Public Key to initialize the SDK. All ingest traffic is logged below.</div>
+    </header>
+
+    <section class="card">
+        <h2>Configuration</h2>
+        <div class="row">
+            <input type="password" id="key-input" placeholder="pk_live_..." style="flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit;" />
+            <button id="init-btn">Initialize SDK</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Session</h2>
+        <dl class="kv" id="session"></dl>
+    </section>
+
+    <section class="card">
+        <h2>Actions</h2>
+        <div class="row">
+            <button id="identify-btn">identify()</button>
+            <button id="nav-push-btn" class="secondary">pushState</button>
+            <button id="nav-back-btn" class="secondary">back()</button>
+            <button id="track-btn" class="secondary">track()</button>
+            <button id="throw-btn" class="secondary">throw Error</button>
+            <button id="reject-btn" class="secondary">reject Promise</button>
+            <button id="net-fail-btn" class="secondary">fetch 404</button>
+            <button id="net-dead-btn" class="secondary">fetch dead host</button>
+            <button id="flush-btn" class="secondary">flush()</button>
+            <button id="reset-btn" class="secondary">reset session</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Log</h2>
+        <pre id="log"></pre>
+    </section>
+
+    <script type="module">
+        import * as reliable from '../../core/dist/index.js';
+
+        const statusEl  = document.getElementById('status');
+        const logEl     = document.getElementById('log');
+        const sessionEl = document.getElementById('session');
+        const keyInput  = document.getElementById('key-input');
+        const initBtn   = document.getElementById('init-btn');
+
+        let pushCount = 0;
+        let isInitialized = false;
+
+        function log(line, cls = 'line-dim') {
+            const ts = new Date().toLocaleTimeString();
+            const row = document.createElement('div');
+            row.className = cls;
+            row.textContent = `${ts}  ${line}`;
+            logEl.appendChild(row);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function setStatus(text, cls) {
+            statusEl.textContent = text;
+            statusEl.className = `pill ${cls}`;
+        }
+
+        function renderKV(target, obj) {
+            target.innerHTML = '';
+            for (const [k, v] of Object.entries(obj)) {
+                const dt = document.createElement('dt');
+                dt.textContent = k;
+                const dd = document.createElement('dd');
+                dd.textContent = typeof v === 'string' ? v : JSON.stringify(v);
+                target.append(dt, dd);
+            }
+        }
+
+        // ── Fetch interceptor ───────────────────────────────────────────
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+            const url = typeof input === 'string' ? input : input.url;
+            const method = (init && init.method) || 'GET';
+            log(`-> ${method} ${url}`, 'line-info');
+            try {
+                const res = await originalFetch(input, init);
+                const cls = res.ok ? 'line-ok' : 'line-err';
+                log(`<- ${res.status} ${res.statusText} ${url}`, cls);
+                if (!res.ok) {
+                    try {
+                        const body = await res.clone().text();
+                        if (body) log(`   ${body}`, 'line-err');
+                    } catch {}
+                }
+                return res;
+            } catch (err) {
+                log(`!! ${method} ${url} — ${err.message}`, 'line-err');
+                throw err;
+            }
+        };
+
+        function initialize(publicKey) {
+            if (isInitialized) {
+                log('SDK already initialized. Refresh to change keys.', 'line-err');
+                return;
+            }
+            if (!publicKey) {
+                log('Public Key is required', 'line-err');
+                return;
+            }
+
+            try {
+                const client = reliable.init({
+                    publicKey: publicKey,
+                    debug: true,
+                });
+
+                localStorage.setItem('reliable_pk', publicKey);
+                isInitialized = true;
+                setStatus('running', 'ok');
+                log('SDK initialized — session + navigation + vitals active', 'line-ok');
+
+                const ctx = client._context ?? client.context ?? null;
+                const sess = ctx?.session?.current?.();
+                if (sess) {
+                    renderKV(sessionEl, {
+                        uuid: sess.uuid,
+                        started_at: new Date(sess.started_at).toISOString(),
+                        sampled: sess.sampled,
+                        user_external_id: sess.user_external_id ?? '(none)',
+                    });
+                }
+            } catch (err) {
+                log(`init failed: ${err.message}`, 'line-err');
+                setStatus('error', 'err');
+            }
+        }
+
+        // ── Load saved key ──────────────────────────────────────────────
+        const savedKey = localStorage.getItem('reliable_pk');
+        if (savedKey) {
+            keyInput.value = savedKey;
+        }
+
+        initBtn.addEventListener('click', () => {
+            initialize(keyInput.value.trim());
+        });
+
+        keyInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                initialize(keyInput.value.trim());
+            }
+        });
+
+        // ── Manual actions ──────────────────────────────────────────────
+
+        function checkInit() {
+            if (!isInitialized) {
+                log('SDK not initialized. Provide a key and click Initialize.', 'line-err');
+                return false;
+            }
+            return true;
+        }
+
+        document.getElementById('identify-btn').addEventListener('click', () => {
+            if (!checkInit()) return;
+            try {
+                reliable.identify({
+                    externalId: 'test_user_001',
+                    email: 'qa@zyloris.in',
+                    name: 'QA Tester',
+                });
+                log('identify() called', 'line-ok');
+            } catch (err) {
+                log(`identify failed: ${err.message}`, 'line-err');
+            }
+        });
+
+        document.getElementById('nav-push-btn').addEventListener('click', () => {
+            if (!checkInit()) return;
+            pushCount++;
+            const path = `/test/page-${pushCount}`;
+            history.pushState({}, '', path);
+            log(`pushState -> ${path}`, 'line-ok');
+        });
+
+        document.getElementById('nav-back-btn').addEventListener('click', () => {
+            if (!checkInit()) return;
+            history.back();
+            log('back()', 'line-ok');
+        });
+
+        document.getElementById('track-btn').addEventListener('click', () => {
+            if (!checkInit()) return;
+            try {
+                reliable.track('Signed Up', { plan: 'Pro', source: 'Test Harness' });
+                log('track() called', 'line-ok');
+            } catch (err) {
+                log(`track failed: ${err.message}`, 'line-err');
+            }
+        });
+
+        document.getElementById('throw-btn').addEventListener('click', () => {
+            if (!checkInit()) return;
+            log('throwing Error...', 'line-dim');
+            setTimeout(() => { throw new Error('Test uncaught error from harness'); }, 0);
+        });
+
+        document.getElementById('reject-btn').addEventListener('click', () => {
+            if (!checkInit()) return;
+            log('rejecting Promise...', 'line-dim');
+            Promise.reject(new Error('Test unhandled rejection from harness'));
+        });
+
+        document.getElementById('net-fail-btn').addEventListener('click', async () => {
+            if (!checkInit()) return;
+            log('fetching a 404...', 'line-dim');
+            try {
+                await fetch('https://httpstat.us/404');
+            } catch {}
+        });
+
+        document.getElementById('net-dead-btn').addEventListener('click', async () => {
+            if (!checkInit()) return;
+            log('fetching a dead host...', 'line-dim');
+            try {
+                await fetch('http://localhost:9999/dead');
+            } catch {}
+        });
+
+        document.getElementById('flush-btn').addEventListener('click', async () => {
+            if (!checkInit()) return;
+            await reliable.flush();
+            log('flush() done', 'line-ok');
+        });
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            sessionStorage.removeItem('reliable:session');
+            log('session cleared — refresh to start fresh', 'line-dim');
+        });
+    </script>
+</body>
+</html>

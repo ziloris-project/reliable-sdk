@@ -55,6 +55,14 @@ export interface ReliableConfig {
     /** If true, network capture reports all requests, not just failures. */
     captureAllRequests?: boolean;
     captureReplay?: boolean;
+    /** If true, console.error and console.warn are captured as messages. */
+    captureConsole?: boolean;
+    /**
+     * Release identifier (commit SHA, version tag, build ID — anything
+     * unique per deploy). Sent with every event so the backend can look
+     * up the matching sourcemap and resolve minified stacks.
+     */
+    release?: string;
 }
 
 export interface ReliableClient {

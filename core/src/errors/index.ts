@@ -96,10 +96,11 @@ export function initErrors(ctx: SdkContext): void {
         // Ignore non-Error events (e.g. script load failures with no message).
         if (!event.error && !event.message) return;
 
-        // Ignore rrweb internal errors to prevent replay → error → replay loops.
-        const msg = event.error?.message ?? event.message ?? '';
-        if (msg.includes('node.matches is not a function') ||
-            msg.includes('rrweb')) return;
+        // Defense-in-depth: drop anything originating inside rrweb so a
+        // recording bug can't trigger an error → replay → recording loop.
+        // The actual fix lives in the rrweb upgrade; this is a safety net.
+        const stack = event.error?.stack ?? '';
+        if (/(^|\W)rrweb(\W|$)/i.test(stack)) return;
 
         const e = event.error;
         captureNormalizedError({

@@ -1,6 +1,6 @@
 {
     "name": "@reliableapp/react",
-    "version": "1.0.2",
+    "version": "1.0.7",
     "description": "Reliable browser SDK — React bindings (Provider, ErrorBoundary, hooks, router).",
     "type": "module",
     "main": "./dist/index.cjs",
@@ -24,7 +24,7 @@
         "clean": "rm -rf dist"
     },
     "dependencies": {
-        "@reliableapp/frontend-core": "^1.0.2"
+        "@reliableapp/frontend-core": "^1.0.7"
     },
     "peerDependencies": {
         "react": ">=18"

@@ -12,6 +12,7 @@ import { createSessionManager, type SessionState } from './session';
 import { createTransport } from './transport';
 import type { ReliableClient, ReliableConfig, UserIdentity } from './types';
 import { initClicks } from './clicks';
+import { initConsole } from './console';
 import { captureException, captureMessage, initErrors } from './errors';
 import { initNavigation } from './navigation';
 import { initNetwork } from './network';
@@ -49,6 +50,9 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
             uuid: payload['uuid'] ?? uuid(),
             session_uuid: payload['session_uuid'] ?? s.uuid,
             occurred_at: payload['occurred_at'] ?? nowIso(),
+            // Release is null when integrators haven't configured it yet —
+            // backend treats null as "no sourcemap available, leave stack as-is".
+            release: payload['release'] ?? config.release,
             ...payload,
         };
         transport.enqueue({ path, payload: enriched });
@@ -107,6 +111,10 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
     // when auto-capture is off. The captureErrors flag only gates the
     // window 'error' / 'unhandledrejection' listeners (handled inside).
     initErrors(context);
+    // Console capture must run AFTER initErrors — it uses captureMessage.
+    if (config.captureConsole) {
+        initConsole(context);
+    }
     if (config.captureNetwork) {
         initNetwork(context);
     }

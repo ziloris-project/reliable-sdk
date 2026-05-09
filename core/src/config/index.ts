@@ -18,6 +18,8 @@ export interface ResolvedConfig {
     captureNavigation: boolean;
     captureAllRequests: boolean;
     captureReplay: boolean;
+    captureConsole: boolean;
+    release: string | null;
 }
 
 const DEFAULT_ENDPOINT = 'https://reliablebackend.ziloris.com/api/v1/ingest';
@@ -53,6 +55,8 @@ export function resolveConfig(input: ReliableConfig): ResolvedConfig {
         captureNavigation:  input.captureNavigation ?? true,
         captureAllRequests: input.captureAllRequests ?? true,
         captureReplay:      input.captureReplay ?? true,
+        captureConsole:     input.captureConsole ?? true,
+        release:            input.release?.trim() || null,
     });
 }
 

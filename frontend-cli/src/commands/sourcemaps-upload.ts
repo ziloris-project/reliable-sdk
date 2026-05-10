@@ -19,13 +19,15 @@ export interface SourcemapsUploadOpts {
 }
 
 export async function sourcemapsUpload(opts: SourcemapsUploadOpts): Promise<void> {
-    // ── Safety: refuse local builds unless --force ─────────────────────
+    // ── Safety: skip local builds unless --force ───────────────────────
+    // Exits 0 (not 2) so chaining the CLI into a `package.json` build
+    // script doesn't break local `npm run build`. Production builds in
+    // CI still upload normally — only laptop builds silently skip.
     const ci = detectCI();
     if (!ci && !opts.force) {
-        console.error(red('✗ Refusing to upload — not running in CI.'));
-        console.error(gray('  No CI env var detected (CI, GITHUB_ACTIONS, VERCEL, etc).'));
-        console.error(gray('  Pass --force to override (e.g. for testing locally).'));
-        process.exit(2);
+        console.log(yellow('⊘  Skipping sourcemap upload — not running in CI.'));
+        console.log(gray('   This is normal for local builds. Add --force to override.'));
+        return;
     }
     if (ci) console.log(gray(`CI detected via $${ci}`));
 

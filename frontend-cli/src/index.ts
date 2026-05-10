@@ -15,10 +15,9 @@ const sourcemaps = program
 sourcemaps
     .command('upload')
     .description('Upload sourcemaps for a release to the Reliable backend')
-    .requiredOption(
+    .option(
         '--token <token>',
         'API token (rl_fpt_...). Falls back to $RELIABLE_TOKEN. The token already names which frontend project to upload to — no other IDs needed.',
-        process.env.RELIABLE_TOKEN,
     )
     .option(
         '--release <id>',

@@ -14,20 +14,29 @@ That's it on a supported platform — release SHA auto-detects, project IDs come
 
 ## Installation
 
-No install needed; use via `npx`:
+Pick whichever fits your workflow:
 
+**As a devDependency (recommended for build scripts):**
 ```bash
-npx @reliableapp/frontend-cli sourcemaps upload [options]
+npm install --save-dev @reliableapp/frontend-cli
 ```
+The `reliableapp-frontend` binary then resolves automatically inside any npm script — fastest option for repeat builds.
 
-Or install globally:
+**Via `npx` (zero install):**
+```bash
+npx --yes @reliableapp/frontend-cli sourcemaps upload [options]
+```
+Slower on first run (downloads the package) but zero setup. Good for one-off CI YAML steps.
 
+**Globally:**
 ```bash
 npm i -g @reliableapp/frontend-cli
 reliableapp-frontend sourcemaps upload [options]
 ```
 
 Requires Node 18+.
+
+> **Heads up:** if you write `reliableapp-frontend ...` directly in a shell or build script *without* installing the package locally or globally, you'll get `command not found`. The binary lives in `node_modules/.bin/` (after install) — npm scripts find it there automatically; raw shell does not.
 
 ## Setup (one-time)
 
@@ -59,12 +68,26 @@ That's the only thing you need — the token already names the frontend project 
 
 ### `package.json` script (Vercel, Netlify, Railway, Render, Coolify, Dokploy, anything Nixpacks-based)
 
-PaaS platforms that auto-build don't have CI step injection — chain the CLI into your build script instead:
+PaaS platforms that auto-build don't have CI step injection — chain the CLI into your build script. Install it as a devDependency once so the binary resolves on every build:
+
+```bash
+npm install --save-dev @reliableapp/frontend-cli
+```
 
 ```json
 {
   "scripts": {
     "build": "vite build && reliableapp-frontend sourcemaps upload --dist=./dist --url-prefix=https://app.example.com/"
+  }
+}
+```
+
+**Or skip the install and use `npx --yes`** (slower on repeat builds — downloaded each time):
+
+```json
+{
+  "scripts": {
+    "build": "vite build && npx --yes @reliableapp/frontend-cli sourcemaps upload --dist=./dist --url-prefix=https://app.example.com/"
   }
 }
 ```

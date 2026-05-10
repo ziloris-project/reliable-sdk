@@ -7,7 +7,7 @@ import { uploadSourcemap } from '../lib/upload.js';
 import { autodetectRelease } from '../lib/release.js';
 
 export interface SourcemapsUploadOpts {
-    token:       string;
+    token?:      string;
     release?:    string;
     dist:        string;
     urlPrefix:   string;
@@ -30,6 +30,17 @@ export async function sourcemapsUpload(opts: SourcemapsUploadOpts): Promise<void
         return;
     }
     if (ci) console.log(gray(`CI detected via $${ci}`));
+
+    // ── Resolve token: explicit flag wins, else $RELIABLE_TOKEN ────────
+    // Read at runtime (not module load) so env vars set by the script
+    // runner before exec are picked up correctly.
+    const token: string = (opts.token?.trim() || process.env.RELIABLE_TOKEN?.trim()) ?? '';
+    if (!token) {
+        console.error(red('✗ No API token provided.'));
+        console.error(gray('  Pass --token=rl_fpt_... or set the RELIABLE_TOKEN environment variable.'));
+        console.error(gray('  Generate a token in: Frontend Project → Settings → API Tokens.'));
+        process.exit(2);
+    }
 
     // ── Resolve release: explicit flag wins, else sniff platform env vars ──
     const explicit = opts.release?.trim();
@@ -100,7 +111,7 @@ export async function sourcemapsUpload(opts: SourcemapsUploadOpts): Promise<void
             try {
                 await uploadSourcemap({
                     api:         opts.api,
-                    token:       opts.token,
+                    token,
                     release,
                     environment: opts.environment,
                     assetUrl,

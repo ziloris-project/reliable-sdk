@@ -1,6 +1,6 @@
 {
     "name": "@reliableapp/frontend-cli",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Reliable frontend CLI — upload sourcemaps and manage frontend releases from CI. Built by Ziloris · https://ziloris.com",
     "homepage": "https://reliable.ziloris.com/docs",
     "bugs": {

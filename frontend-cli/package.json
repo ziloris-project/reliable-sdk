@@ -1,0 +1,52 @@
+{
+    "name": "@reliableapp/frontend-cli",
+    "version": "1.0.0",
+    "description": "Reliable frontend CLI — upload sourcemaps and manage frontend releases from CI. Built by Ziloris · https://ziloris.com",
+    "homepage": "https://reliable.ziloris.com/docs",
+    "bugs": {
+        "url": "https://reliable.ziloris.com/docs"
+    },
+    "author": {
+        "name": "Ziloris",
+        "url": "https://ziloris.com"
+    },
+    "keywords": [
+        "reliable",
+        "ziloris",
+        "sourcemaps",
+        "error-tracking",
+        "observability",
+        "frontend",
+        "cli",
+        "ci"
+    ],
+    "type": "module",
+    "bin": {
+        "reliableapp-frontend": "./dist/index.js"
+    },
+    "main": "./dist/index.js",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "typecheck": "tsc --noEmit",
+        "clean": "rm -rf dist"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "dependencies": {
+        "commander": "^12.1.0",
+        "kleur": "^4.1.5"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "tsup": "^8.5.1",
+        "typescript": "~5.7.0"
+    }
+}

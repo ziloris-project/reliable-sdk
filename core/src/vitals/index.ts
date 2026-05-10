@@ -39,17 +39,20 @@ export function initVitals(ctx: SdkContext): void {
     function emit(
         name: MetricName,
         value: number,
-        rating: 'good' | 'needs_improvement' | 'poor',
+        // web-vitals returns 'needs-improvement' (dashed) — backend expects
+        // 'needs_improvement' (underscored). Accept either, normalize before send.
+        rating: 'good' | 'needs-improvement' | 'needs_improvement' | 'poor',
         attribution: Record<string, unknown>,
     ): void {
         const path = getCurrentPath() || location.pathname;
-        logger.debug('vital', name, value, rating, path);
+        const normalizedRating = rating === 'needs-improvement' ? 'needs_improvement' : rating;
+        logger.debug('vital', name, value, normalizedRating, path);
 
         capture('/vitals', {
             uuid: uuid(),
             metric: name,
             value,
-            rating,
+            rating: normalizedRating,
             path,
             attribution,
             device_type: getDeviceType(),

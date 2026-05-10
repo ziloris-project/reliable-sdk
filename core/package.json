@@ -1,6 +1,6 @@
 {
     "name": "@reliableapp/frontend-core",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "description": "Reliable browser SDK — framework-agnostic core (errors, vitals, network, clicks, navigation, replay). Built by Ziloris · https://ziloris.com",
     "homepage": "https://reliable.ziloris.com/docs",
     "bugs": {

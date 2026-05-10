@@ -51,9 +51,17 @@ export async function sourcemapsUpload(opts: SourcemapsUploadOpts): Promise<void
         explicit ? '--release flag' : auto ? `$${auto.source}` : '';
     if (!release) {
         console.error(red('✗ --release not provided and could not auto-detect.'));
-        console.error(gray('  Pass --release explicitly, or run on a platform that sets one of:'));
-        console.error(gray('    GITHUB_SHA, VERCEL_GIT_COMMIT_SHA, RAILWAY_GIT_COMMIT_SHA,'));
-        console.error(gray('    RENDER_GIT_COMMIT, CF_PAGES_COMMIT_SHA, SOURCE_COMMIT, etc.'));
+        console.error(gray(''));
+        console.error(gray('  Auto-detect tries (in order):'));
+        console.error(gray('    1. Platform env vars (GITHUB_SHA, VERCEL_GIT_COMMIT_SHA,'));
+        console.error(gray('       RAILWAY_GIT_COMMIT_SHA, RENDER_GIT_COMMIT, etc).'));
+        console.error(gray('    2. `git rev-parse HEAD` if .git/ is in the build context.'));
+        console.error(gray(''));
+        console.error(gray('  For Docker-based PaaS (Dokploy, Coolify, Nixpacks-based) where'));
+        console.error(gray('  .git/ is typically excluded from the build, do ONE of:'));
+        console.error(gray('    a) Set RELEASE=<your-build-id> in the platform\'s env vars UI.'));
+        console.error(gray('    b) Pass --release=$npm_package_version (uses package.json version).'));
+        console.error(gray('    c) Add !.git to your .dockerignore so git rev-parse works.'));
         process.exit(2);
     }
 

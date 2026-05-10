@@ -2,14 +2,12 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 export interface UploadInput {
-    api:                 string;
-    token:               string;
-    masterProjectId:     string;
-    frontendProjectUuid: string;
-    release:             string;
-    environment:         string;
-    assetUrl:            string;
-    mapPath:             string;
+    api:         string;
+    token:       string;
+    release:     string;
+    environment: string;
+    assetUrl:    string;
+    mapPath:     string;
 }
 
 /** POST one .js.map to the backend. Throws on non-2xx. */
@@ -23,11 +21,9 @@ export async function uploadSourcemap(input: UploadInput): Promise<void> {
     form.append('asset_url',   input.assetUrl);
     form.append('sourcemap',   blob, path.basename(input.mapPath));
 
-    const url =
-        `${input.api.replace(/\/+$/, '')}` +
-        `/v1/projects/${input.masterProjectId}` +
-        `/frontend-projects/${input.frontendProjectUuid}` +
-        `/sourcemaps`;
+    // Token-scoped endpoint — the rl_fpt_ token in the Authorization header
+    // tells the backend which frontend project to upload to. No project IDs.
+    const url = `${input.api.replace(/\/+$/, '')}/v1/sourcemaps`;
 
     const res = await fetch(url, {
         method:  'POST',

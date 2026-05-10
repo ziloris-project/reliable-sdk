@@ -17,18 +17,8 @@ sourcemaps
     .description('Upload sourcemaps for a release to the Reliable backend')
     .requiredOption(
         '--token <token>',
-        'API token (rl_fpt_...). Falls back to $RELIABLE_TOKEN.',
+        'API token (rl_fpt_...). Falls back to $RELIABLE_TOKEN. The token already names which frontend project to upload to — no other IDs needed.',
         process.env.RELIABLE_TOKEN,
-    )
-    .requiredOption(
-        '--project <id>',
-        'Master project UUID. Falls back to $RELIABLE_PROJECT_ID.',
-        process.env.RELIABLE_PROJECT_ID,
-    )
-    .requiredOption(
-        '--frontend-project <id>',
-        'Frontend project UUID. Falls back to $RELIABLE_FRONTEND_PROJECT_ID.',
-        process.env.RELIABLE_FRONTEND_PROJECT_ID,
     )
     .option(
         '--release <id>',

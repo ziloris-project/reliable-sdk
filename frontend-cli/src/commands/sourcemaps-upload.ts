@@ -7,17 +7,15 @@ import { uploadSourcemap } from '../lib/upload.js';
 import { autodetectRelease } from '../lib/release.js';
 
 export interface SourcemapsUploadOpts {
-    token:           string;
-    project:         string;
-    frontendProject: string;
-    release?:        string;
-    dist:            string;
-    urlPrefix:       string;
-    environment:     string;
-    api:             string;
-    concurrency:     string;
-    force?:          boolean;
-    dryRun?:         boolean;
+    token:       string;
+    release?:    string;
+    dist:        string;
+    urlPrefix:   string;
+    environment: string;
+    api:         string;
+    concurrency: string;
+    force?:      boolean;
+    dryRun?:     boolean;
 }
 
 export async function sourcemapsUpload(opts: SourcemapsUploadOpts): Promise<void> {
@@ -99,14 +97,12 @@ export async function sourcemapsUpload(opts: SourcemapsUploadOpts): Promise<void
             const assetUrl = computeAssetUrl(opts.urlPrefix, m.relativePath);
             try {
                 await uploadSourcemap({
-                    api:                 opts.api,
-                    token:               opts.token,
-                    masterProjectId:     opts.project,
-                    frontendProjectUuid: opts.frontendProject,
+                    api:         opts.api,
+                    token:       opts.token,
                     release,
-                    environment:         opts.environment,
+                    environment: opts.environment,
                     assetUrl,
-                    mapPath:             m.absolutePath,
+                    mapPath:     m.absolutePath,
                 });
                 results.ok++;
                 console.log(green('  ✓'), assetUrl);

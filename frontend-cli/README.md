@@ -35,13 +35,13 @@ In the Reliable dashboard, generate an API token for your frontend project:
 
 > Project → Frontend Project → Settings → API Tokens → **Create token**
 
-Copy the `rl_fpt_...` value (shown once). Set it as a secret in your CI / deploy platform alongside the project IDs:
+Copy the `rl_fpt_...` value (shown once) and set it as a secret in your CI / deploy platform:
 
 | Variable | Description |
 |---|---|
 | `RELIABLE_TOKEN` | The `rl_fpt_...` token. **Mark as secret.** |
-| `RELIABLE_PROJECT_ID` | Master project UUID (from dashboard URL) |
-| `RELIABLE_FRONTEND_PROJECT_ID` | Frontend project UUID (from dashboard URL) |
+
+That's the only thing you need — the token already names the frontend project to upload to.
 
 ## Usage
 
@@ -50,9 +50,7 @@ Copy the `rl_fpt_...` value (shown once). Set it as a secret in your CI / deploy
 ```yaml
 - name: Upload sourcemaps
   env:
-    RELIABLE_TOKEN:                ${{ secrets.RELIABLE_TOKEN }}
-    RELIABLE_PROJECT_ID:           ${{ vars.RELIABLE_PROJECT_ID }}
-    RELIABLE_FRONTEND_PROJECT_ID:  ${{ vars.RELIABLE_FRONTEND_PROJECT_ID }}
+    RELIABLE_TOKEN: ${{ secrets.RELIABLE_TOKEN }}
   run: |
     npx @reliableapp/frontend-cli sourcemaps upload \
       --dist=./dist \
@@ -71,7 +69,7 @@ PaaS platforms that auto-build don't have CI step injection — chain the CLI in
 }
 ```
 
-Set `RELIABLE_TOKEN`, `RELIABLE_PROJECT_ID`, `RELIABLE_FRONTEND_PROJECT_ID` in the platform's environment variables UI. The CLI auto-detects the commit SHA from the platform's own env vars (no `--release` needed).
+Set `RELIABLE_TOKEN` in the platform's environment variables UI. The CLI auto-detects the commit SHA from the platform's own env vars (no `--release` needed).
 
 ## Required SDK config
 
@@ -92,9 +90,7 @@ Without `release`, events arrive but the resolver has no way to find the right m
 
 | Flag | Default | Description |
 |---|---|---|
-| `--token <token>` | `$RELIABLE_TOKEN` | API token (`rl_fpt_...`) |
-| `--project <id>` | `$RELIABLE_PROJECT_ID` | Master project UUID |
-| `--frontend-project <id>` | `$RELIABLE_FRONTEND_PROJECT_ID` | Frontend project UUID |
+| `--token <token>` | `$RELIABLE_TOKEN` | API token (`rl_fpt_...`). The token names the frontend project — no other IDs needed. |
 | `--release <id>` | auto | Release identifier. Auto-detected on supported platforms |
 | `--dist <path>` | required | Local path to the build output folder |
 | `--url-prefix <url>` | required | Browser-visible URL prefix that maps to `--dist` root |

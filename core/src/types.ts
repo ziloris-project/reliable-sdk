@@ -58,6 +58,12 @@ export interface ReliableConfig {
     /** If true, console.error and console.warn are captured as messages. */
     captureConsole?: boolean;
     /**
+     * If true, `window.WebSocket` is instrumented to record one summary
+     * row per connection (open, close, message/byte counts) and to forward
+     * post-open errors + abnormal closes to the error pipeline. Defaults true.
+     */
+    captureWebSockets?: boolean;
+    /**
      * Release identifier (commit SHA, version tag, build ID — anything
      * unique per deploy). Sent with every event so the backend can look
      * up the matching sourcemap and resolve minified stacks.

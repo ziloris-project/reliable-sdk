@@ -18,6 +18,7 @@ import { initNavigation } from './navigation';
 import { initNetwork } from './network';
 import { initVitals } from './vitals';
 import { initReplay } from './replay';
+import { initWebSocket } from './websocket';
 import { createLogger } from './util/log';
 import { nowIso } from './util/now';
 import { uuid } from './util/uuid';
@@ -117,6 +118,9 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
     }
     if (config.captureNetwork) {
         initNetwork(context);
+    }
+    if (config.captureWebSockets) {
+        initWebSocket(context);
     }
     if (config.captureClicks) {
         initClicks(context);

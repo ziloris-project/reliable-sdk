@@ -19,6 +19,7 @@ export interface ResolvedConfig {
     captureAllRequests: boolean;
     captureReplay: boolean;
     captureConsole: boolean;
+    captureWebSockets: boolean;
     release: string | null;
 }
 
@@ -56,6 +57,7 @@ export function resolveConfig(input: ReliableConfig): ResolvedConfig {
         captureAllRequests: input.captureAllRequests ?? true,
         captureReplay:      input.captureReplay ?? true,
         captureConsole:     input.captureConsole ?? true,
+        captureWebSockets:  input.captureWebSockets ?? true,
         release:            input.release?.trim() || null,
     });
 }

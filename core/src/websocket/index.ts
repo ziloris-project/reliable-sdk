@@ -24,6 +24,7 @@ import { getCurrentPath } from '../navigation';
 import { scrubUrl } from '../scrub';
 import { nowIso } from '../util/now';
 import { uuid } from '../util/uuid';
+import { SessionAggregator } from './sketches';
 
 /** Sliding window for reconnect storm detection — same template within Ns. */
 const RECONNECT_WINDOW_MS = 30_000;
@@ -98,6 +99,13 @@ export function initWebSocket(ctx: SdkContext): void {
             flushed: false,
         };
 
+        // L2/L3 anomaly aggregator — accumulates fingerprint counters,
+        // size & inter-message-delay sketches, and the from→to adjacency
+        // graph. Bounded-memory (~4-8KB worst case). Payload contents
+        // never leave this object; only structural hashes do. Emitted to
+        // /websocket/sketch on close alongside the existing L1 capture.
+        const aggregator = new SessionAggregator();
+
         // Construct the real socket. WebSocket throws synchronously on bad
         // URLs (mixed-content, malformed) — let that bubble to user code.
         const ws = protocols == null
@@ -108,8 +116,10 @@ export function initWebSocket(ctx: SdkContext): void {
         //    clobber whatever the user assigns to onopen/onerror/onclose).
 
         ws.addEventListener('message', (ev: MessageEvent) => {
+            const size = sizeOfMessage(ev.data);
             meta.messagesReceived++;
-            meta.bytesReceived += sizeOfMessage(ev.data);
+            meta.bytesReceived += size;
+            aggregator.observeIncoming(ev.data, size, Date.now());
         });
 
         ws.addEventListener('error', () => {
@@ -171,6 +181,24 @@ export function initWebSocket(ctx: SdkContext): void {
                 occurred_at: nowIso(),
             });
 
+            // L2/L3 sketch envelope — emitted alongside the L1 lifecycle
+            // capture. Skipped if we never observed a message (counter +
+            // sketch maps are empty; backend would only count an empty
+            // session toward calibration which is technically correct but
+            // not useful). Top-level fields mirror the /websocket payload
+            // so the backend can link the rollup to the session row by
+            // ws_uuid and stamp `(page, template)` baselines per project.
+            if (meta.messagesSent > 0 || meta.messagesReceived > 0) {
+                capture('/websocket/sketch', {
+                    ws_uuid: connUuid,
+                    url: safeUrl,
+                    url_template: template,
+                    path,
+                    occurred_at: nowIso(),
+                    ...aggregator.toEnvelope(),
+                });
+            }
+
             logger.debug('websocket close', closeCode, safeUrl, `${meta.messagesSent}↑/${meta.messagesReceived}↓`);
         });
 
@@ -187,9 +215,14 @@ export function initWebSocket(ctx: SdkContext): void {
                 // Let the native call throw — same behavior the user would
                 // have seen without us; we just observed it.
             }
+            const size = sizeOfMessage(data);
             meta.messagesSent++;
-            meta.bytesSent += sizeOfMessage(data);
-            return origSend(data);
+            meta.bytesSent += size;
+            aggregator.observeOutgoing(data, size, Date.now());
+            // Cast to BodyInit — the platform send accepts what the SDK
+            // accepts; the TS narrowing here is a libdom quirk over
+            // SharedArrayBuffer that we sidestep at the call site.
+            return origSend(data as Parameters<WebSocket['send']>[0]);
         };
 
         return ws;

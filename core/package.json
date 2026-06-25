@@ -1,10 +1,16 @@
 {
     "name": "@reliableapp/frontend-core",
     "version": "1.1.0",
-    "description": "Reliable browser SDK — framework-agnostic core (errors, vitals, network, clicks, navigation, replay). Built by Ziloris · https://ziloris.com",
-    "homepage": "https://reliable.ziloris.com/docs",
+    "description": "Framework-agnostic browser SDK for Reliable. Errors, web vitals, network capture, session replay, WebSocket monitoring, user interactions — one init() call. Built by Ziloris.",
+    "license": "MIT",
+    "homepage": "https://github.com/ziloris-project/reliable-sdk/tree/main/core#readme",
     "bugs": {
-        "url": "https://reliable.ziloris.com/docs"
+        "url": "https://github.com/ziloris-project/reliable-sdk/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ziloris-project/reliable-sdk.git",
+        "directory": "core"
     },
     "author": {
         "name": "Ziloris",
@@ -17,7 +23,10 @@
         "web-vitals",
         "browser-sdk",
         "monitoring",
+        "websocket",
         "analytics",
+        "performance",
+        "rum",
         "reliable",
         "ziloris"
     ],
@@ -33,7 +42,9 @@
         }
     },
     "files": [
-        "dist"
+        "dist",
+        "README.md",
+        "LICENSE"
     ],
     "sideEffects": false,
     "scripts": {
@@ -43,7 +54,8 @@
         "clean": "rm -rf dist"
     },
     "publishConfig": {
-        "access": "public"
+        "access": "public",
+        "provenance": true
     },
     "dependencies": {
         "pako": "^2.1.0",

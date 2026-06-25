@@ -53,7 +53,7 @@
     },
     "publishConfig": {
         "access": "public",
-        "provenance": true
+        "provenance": false
     },
     "dependencies": {
         "@reliableapp/frontend-core": "workspace:^"

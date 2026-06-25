@@ -92,7 +92,10 @@ jobs:
           # Provenance is enabled by the --provenance flag in the
           # publish script. Setting this env var is npm's belt-and-
           # braces signal that we're operating in a trusted CI context.
-          NPM_CONFIG_PROVENANCE: 'true'
+          # Provenance disabled for the initial publish — npm trusted
+          # publishers need to be verified working end-to-end first.
+          # Once 1.2.0 is on npm, flip back to 'true'.
+          NPM_CONFIG_PROVENANCE: 'false'
 
       - name: Summarise outcome
         if: always()

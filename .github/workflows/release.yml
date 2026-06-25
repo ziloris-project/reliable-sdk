@@ -1,0 +1,106 @@
+# Release pipeline driven by Changesets.
+#
+# Authoring flow (a PR adding a feature):
+#   1. Make the code change.
+#   2. Run `pnpm changeset` and pick the affected packages + semver impact.
+#   3. Commit the generated .changeset/*.md alongside the code.
+#   4. Open the PR. Reviewer sees the changelog entry in the diff.
+#
+# Release flow (this workflow):
+#   1. Pushes to main run the workflow.
+#   2. If any .changeset/*.md files exist, changesets/action opens a PR
+#      titled "Version Packages" that bumps versions in package.json,
+#      updates each package's CHANGELOG.md, and deletes the consumed
+#      changeset files.
+#   3. Merging the Version Packages PR triggers this workflow again. This
+#      time there are no pending changesets, so the action runs the
+#      publish step instead: `pnpm release` → `changeset publish` → npm.
+#   4. Each publish is signed with sigstore provenance so npmjs.com
+#      renders a verified attestation badge linking the artifact to this
+#      exact workflow run.
+#
+# Required secrets:
+#   - NPM_TOKEN — automation token from npmjs.com with publish access
+#     to the @reliableapp scope.
+#
+# Required permissions: id-token write (for provenance), contents write
+# (to push the Version Packages branch + tags), pull-requests write
+# (to open the PR).
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents:       write
+  pull-requests:  write
+  id-token:       write
+
+jobs:
+  release:
+    name: Version + publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # changesets needs full history to determine which packages
+          # changed since the last release.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Create release PR or publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          # If pending changesets exist on main, open / update a
+          # Version Packages PR. If none exist (so the previous
+          # Version PR was just merged), run the publish command.
+          version: pnpm changeset version
+          publish: pnpm release
+          commit:  'chore(release): version packages'
+          title:   'chore(release): version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN:    ${{ secrets.NPM_TOKEN }}
+          # Provenance is enabled by the --provenance flag in the
+          # publish script. Setting this env var is npm's belt-and-
+          # braces signal that we're operating in a trusted CI context.
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      - name: Summarise outcome
+        if: always()
+        run: |
+          if [[ "${{ steps.changesets.outputs.published }}" == "true" ]]; then
+            echo "📦 Published packages:"
+            echo '${{ steps.changesets.outputs.publishedPackages }}'
+          elif [[ "${{ steps.changesets.outputs.hasChangesets }}" == "true" ]]; then
+            echo "📝 Version Packages PR opened or updated."
+          else
+            echo "ℹ️  No pending changesets and nothing to publish."
+          fi

@@ -1,6 +1,6 @@
 {
     "name": "@reliableapp/frontend-core",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "Framework-agnostic browser SDK for Reliable. Errors, web vitals, network capture, session replay, WebSocket monitoring, user interactions — one init() call. Built by Ziloris.",
     "license": "Apache-2.0",
     "homepage": "https://github.com/ziloris-project/reliable-sdk/tree/main/core#readme",

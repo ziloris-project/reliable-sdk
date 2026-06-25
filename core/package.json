@@ -55,7 +55,7 @@
     },
     "publishConfig": {
         "access": "public",
-        "provenance": false
+        "provenance": true
     },
     "dependencies": {
         "pako": "^2.1.0",

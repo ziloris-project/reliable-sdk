@@ -95,7 +95,7 @@ jobs:
           # Provenance disabled for the initial publish — npm trusted
           # publishers need to be verified working end-to-end first.
           # Once 1.2.0 is on npm, flip back to 'true'.
-          NPM_CONFIG_PROVENANCE: 'false'
+          NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Summarise outcome
         if: always()

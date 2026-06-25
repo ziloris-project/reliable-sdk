@@ -1,0 +1,18 @@
+{
+    "$schema": "https://unpkg.com/@changesets/config@3.1.4/schema.json",
+    "changelog": [
+        "@changesets/changelog-github",
+        { "repo": "ziloris-project/reliable-sdk" }
+    ],
+    "commit": false,
+    "fixed": [],
+    "linked": [
+        ["@reliableapp/frontend-core", "@reliableapp/react"]
+    ],
+    "access": "public",
+    "baseBranch": "main",
+    "updateInternalDependencies": "patch",
+    "ignore": [
+        "@reliable/sdk"
+    ]
+}

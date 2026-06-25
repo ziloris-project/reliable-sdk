@@ -3,7 +3,7 @@
     "version": "0.0.0",
     "private": true,
     "description": "Reliable browser SDK monorepo (core + framework bindings)",
-    "license": "MIT",
+    "license": "Apache-2.0",
     "homepage": "https://github.com/ziloris-project/reliable-sdk#readme",
     "bugs": {
         "url": "https://github.com/ziloris-project/reliable-sdk/issues"

@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/@reliableapp/frontend-core?style=flat&color=blue)](https://www.npmjs.com/package/@reliableapp/frontend-core)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/@reliableapp/frontend-core?style=flat&color=green)](https://bundlephobia.com/package/@reliableapp/frontend-core)
 [![types](https://img.shields.io/npm/types/@reliableapp/frontend-core?style=flat)](https://www.npmjs.com/package/@reliableapp/frontend-core)
-[![license](https://img.shields.io/npm/l/@reliableapp/frontend-core?style=flat)](./LICENSE)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat)](./LICENSE)
 
 Framework-agnostic browser SDK for [Reliable](https://reliable.ziloris.com).
 Captures errors, web vitals, network failures, user interactions,
@@ -222,4 +222,4 @@ merging it publishes to npm with sigstore provenance attestation.
 
 ## License
 
-[MIT](./LICENSE) © [Ziloris](https://ziloris.com)
+[Apache 2.0](./LICENSE) © [Ziloris](https://ziloris.com)

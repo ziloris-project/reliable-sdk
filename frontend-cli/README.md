@@ -154,4 +154,4 @@ The CLI refuses to upload when no CI env var is detected, to prevent your local 
 
 ## License
 
-MIT
+[Apache 2.0](./LICENSE) © [Ziloris](https://ziloris.com)

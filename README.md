@@ -74,9 +74,9 @@ contract.
 ## Contributing
 
 Issues, discussions, and PRs are welcome. The project uses Changesets
-(see above) for versioning, MIT for licensing, and a single PR-to-`main`
-flow for all changes.
+(see above) for versioning, Apache 2.0 for licensing, and a single
+PR-to-`main` flow for all changes.
 
 ## License
 
-[MIT](./LICENSE) © [Ziloris](https://ziloris.com)
+[Apache 2.0](./LICENSE) © [Ziloris](https://ziloris.com)

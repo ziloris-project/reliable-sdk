@@ -2,9 +2,15 @@
     "name": "@reliableapp/frontend-cli",
     "version": "1.0.5",
     "description": "Reliable frontend CLI — upload sourcemaps and manage frontend releases from CI. Built by Ziloris · https://ziloris.com",
-    "homepage": "https://reliable.ziloris.com/docs",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/ziloris-project/reliable-sdk/tree/main/frontend-cli#readme",
     "bugs": {
-        "url": "https://reliable.ziloris.com/docs"
+        "url": "https://github.com/ziloris-project/reliable-sdk/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ziloris-project/reliable-sdk.git",
+        "directory": "frontend-cli"
     },
     "author": {
         "name": "Ziloris",

@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/@reliableapp/react?style=flat&color=blue)](https://www.npmjs.com/package/@reliableapp/react)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/@reliableapp/react?style=flat&color=green)](https://bundlephobia.com/package/@reliableapp/react)
 [![types](https://img.shields.io/npm/types/@reliableapp/react?style=flat)](https://www.npmjs.com/package/@reliableapp/react)
-[![license](https://img.shields.io/npm/l/@reliableapp/react?style=flat)](./LICENSE)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat)](./LICENSE)
 
 React bindings for [Reliable](https://reliable.ziloris.com).
 Wraps [`@reliableapp/frontend-core`](https://www.npmjs.com/package/@reliableapp/frontend-core)
@@ -221,4 +221,4 @@ see the [core README](../core/README.md#contributing) for the workflow.
 
 ## License
 
-[MIT](./LICENSE) © [Ziloris](https://ziloris.com)
+[Apache 2.0](./LICENSE) © [Ziloris](https://ziloris.com)

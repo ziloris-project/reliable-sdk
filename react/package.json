@@ -2,7 +2,7 @@
     "name": "@reliableapp/react",
     "version": "1.1.0",
     "description": "React bindings for Reliable — Provider, ErrorBoundary with component stacks, hooks, and router adapters. Re-exports the full core SDK.",
-    "license": "MIT",
+    "license": "Apache-2.0",
     "homepage": "https://github.com/ziloris-project/reliable-sdk/tree/main/react#readme",
     "bugs": {
         "url": "https://github.com/ziloris-project/reliable-sdk/issues"

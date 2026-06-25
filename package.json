@@ -23,7 +23,7 @@
         "typecheck": "pnpm -r typecheck",
         "clean": "pnpm -r clean",
         "changeset": "changeset",
-        "version": "changeset version",
+        "version": "changeset version && pnpm install --lockfile-only",
         "release": "pnpm build && changeset publish --provenance"
     },
     "devDependencies": {

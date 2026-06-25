@@ -1,0 +1,25 @@
+# Notify reliable-architecture that this repo moved, so the generators
+# rerun against the new SHA. Triggered on every push to main.
+#
+# The dispatch payload carries the source repo and SHA so the
+# architecture repo's auto-commit can name them. ARCH_DISPATCH_PAT is
+# a fine-grained PAT with Actions: write access on the
+# ziloris-project/reliable-architecture repo.
+
+name: notify-architecture
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch source-pushed event
+        run: |
+          curl --fail -X POST \
+            -H "Authorization: token ${{ secrets.ARCH_DISPATCH_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/ziloris-project/reliable-architecture/dispatches \
+            -d '{"event_type":"source-pushed","client_payload":{"repo":"${{ github.repository }}","sha":"${{ github.sha }}"}}'

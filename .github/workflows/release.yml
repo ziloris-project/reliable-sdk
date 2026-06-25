@@ -96,20 +96,20 @@ jobs:
           commit:  'chore(release): version packages'
           title:   'chore(release): version packages'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer PAT for the Version Packages PR so push-from-bot
+          # PRs trigger CI. Falls back to GITHUB_TOKEN if the secret
+          # isn't set (publish-only flows still work in that case).
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PAT || secrets.GITHUB_TOKEN }}
+          # NPM_TOKEN is required by changesets/action for its env
+          # check, but the actual publish goes through OIDC trusted
+          # publisher (configured on npmjs.com per package). The token
+          # is no longer the publish auth path — it's a no-op as far
+          # as registry writes go.
           NPM_TOKEN:    ${{ secrets.NPM_TOKEN }}
-          # Provenance is enabled by the --provenance flag in the
-          # publish script. Setting this env var is npm's belt-and-
-          # braces signal that we're operating in a trusted CI context.
-          # Provenance disabled for the initial publish — npm trusted
-          # publishers need to be verified working end-to-end first.
-          # Once 1.2.0 is on npm, flip back to 'true'.
+          # Provenance attaches a signed sigstore attestation linking
+          # each artifact back to this exact workflow run. Visible as
+          # a verified badge on npmjs.com.
           NPM_CONFIG_PROVENANCE: 'true'
-          # Crank npm verbosity so the next failure shows the actual
-          # auth path npm is choosing (token vs OIDC) and the literal
-          # request headers — the default output collapses both behind
-          # the same E404 noise.
-          NPM_CONFIG_LOGLEVEL: 'verbose'
 
       - name: Summarise outcome
         if: always()

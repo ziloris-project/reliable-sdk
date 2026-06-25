@@ -96,6 +96,11 @@ jobs:
           # publishers need to be verified working end-to-end first.
           # Once 1.2.0 is on npm, flip back to 'true'.
           NPM_CONFIG_PROVENANCE: 'true'
+          # Crank npm verbosity so the next failure shows the actual
+          # auth path npm is choosing (token vs OIDC) and the literal
+          # request headers — the default output collapses both behind
+          # the same E404 noise.
+          NPM_CONFIG_LOGLEVEL: 'verbose'
 
       - name: Summarise outcome
         if: always()

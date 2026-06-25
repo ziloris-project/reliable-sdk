@@ -66,6 +66,15 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
+      # npm 10 ships with Node 22 but only uses OIDC for provenance
+      # attestation — the actual publish PUT still goes through
+      # NPM_TOKEN. npm 11.5.1+ also routes the publish PUT through
+      # the GitHub OIDC trusted-publisher flow, which is what we
+      # configured on npmjs.com. Without this upgrade the trusted
+      # publisher is never consulted and we get E404.
+      - name: Upgrade npm to OIDC-capable version
+        run: npm install -g npm@latest
+
       - name: Install
         run: pnpm install --frozen-lockfile
 

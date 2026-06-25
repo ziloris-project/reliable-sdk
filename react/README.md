@@ -1,199 +1,224 @@
 # @reliableapp/react
 
-React bindings for [@reliableapp/frontend-core](https://www.npmjs.com/package/@reliableapp/frontend-core). Adds `<ReliableProvider>`, `<ReliableErrorBoundary>`, hooks, and router adapters — plus re-exports the full core API so you only need one package.
+[![npm version](https://img.shields.io/npm/v/@reliableapp/react?style=flat&color=blue)](https://www.npmjs.com/package/@reliableapp/react)
+[![npm downloads](https://img.shields.io/npm/dm/@reliableapp/react?style=flat&color=blue)](https://www.npmjs.com/package/@reliableapp/react)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/@reliableapp/react?style=flat&color=green)](https://bundlephobia.com/package/@reliableapp/react)
+[![types](https://img.shields.io/npm/types/@reliableapp/react?style=flat)](https://www.npmjs.com/package/@reliableapp/react)
+[![license](https://img.shields.io/npm/l/@reliableapp/react?style=flat)](./LICENSE)
 
-Built by [Ziloris](https://ziloris.com) · **[Full documentation →](https://reliable.ziloris.com/docs)**
+React bindings for [Reliable](https://reliable.ziloris.com).
+Wraps [`@reliableapp/frontend-core`](https://www.npmjs.com/package/@reliableapp/frontend-core)
+with a `<ReliableProvider>`, an error boundary that captures component
+stacks, hooks that get you the active client, and adapters for the two
+React Router setups.
 
----
+You only need this package — the core SDK is re-exported, so a single
+install covers both surfaces.
 
 ## Install
 
 ```bash
+# pnpm
+pnpm add @reliableapp/react
+
+# npm
 npm install @reliableapp/react
+
+# yarn
+yarn add @reliableapp/react
 ```
 
-React 18+ is required as a peer dependency.
+Peer dependency: React `>= 18`.
 
 ## Quick start
 
-Wrap your app root with `<ReliableProvider>` and add `<ReliableErrorBoundary>` wherever you want crash reporting:
+Mount `<ReliableProvider>` at the root of your tree and wrap your app
+in `<ReliableErrorBoundary>`:
 
 ```tsx
-import { ReliableProvider, ReliableErrorBoundary } from '@reliableapp/react';
+import {
+    ReliableProvider,
+    ReliableErrorBoundary,
+} from '@reliableapp/react';
 
-export default function RootLayout({ children }) {
-  return (
-    <ReliableProvider config={{ publicKey: 'pk_live_rl_...' }}>
-      <ReliableErrorBoundary fallback={<p>Something went wrong.</p>}>
-        {children}
-      </ReliableErrorBoundary>
-    </ReliableProvider>
-  );
+export default function App() {
+    return (
+        <ReliableProvider config={{ publicKey: 'pk_live_rl_xxxxxxxxxxxxxxxx' }}>
+            <ReliableErrorBoundary fallback={<p>Something went wrong.</p>}>
+                <YourApp />
+            </ReliableErrorBoundary>
+        </ReliableProvider>
+    );
 }
 ```
 
-## Components
+That's enough to capture errors, web vitals, network failures,
+interactions, session replays, WebSockets, and console output across
+the whole app. Every component-tree crash from `ReliableErrorBoundary`
+is reported with the React component stack alongside the JS stack.
 
-### `<ReliableProvider>`
+## Next.js
 
-Initializes the SDK once and exposes the client via context. Place this at the root of your app, outside any router.
+For the App Router, mount the provider inside `app/layout.tsx`:
 
 ```tsx
-<ReliableProvider
-  config={{
-    publicKey: 'pk_live_rl_...',
-    sampleRate: 100,
-    captureReplay: true,
-  }}
->
-  <App />
-</ReliableProvider>
+// app/layout.tsx
+'use client';
+
+import { ReliableProvider } from '@reliableapp/react';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <html>
+            <body>
+                <ReliableProvider config={{
+                    publicKey: process.env.NEXT_PUBLIC_RELIABLE_KEY!,
+                    release:   process.env.NEXT_PUBLIC_GIT_SHA,
+                }}>
+                    {children}
+                </ReliableProvider>
+            </body>
+        </html>
+    );
+}
 ```
 
-### `<ReliableErrorBoundary>`
+For the Pages Router, mount in `_app.tsx`. See the
+[full Next.js guide](https://reliable.ziloris.com/docs/react).
 
-Catches render-phase crashes, reports them to Reliable with the full React component stack, and renders a fallback UI.
+## What's in the box
+
+### `<ReliableProvider config={...}>`
+
+Initialises the SDK exactly once (idempotent through React StrictMode
+and HMR), exposes the client via context, and flushes the outbound
+queue on unmount so events aren't lost during hot reload.
+
+Accepts the same `ReliableConfig` shape as `init()` from the core
+package — see the [config reference](https://reliable.ziloris.com/docs/configuration).
+
+### `<ReliableErrorBoundary fallback={...}>`
+
+A standard React error boundary that, on catch, forwards the error to
+Reliable along with the React `componentStack`. Pair with a `key`
+prop to reset on navigation:
 
 ```tsx
-// Static fallback
-<ReliableErrorBoundary fallback={<ErrorPage />}>
-  <Dashboard />
-</ReliableErrorBoundary>
-
-// Render-prop fallback with reset
 <ReliableErrorBoundary
-  fallback={(error, reset) => (
-    <div>
-      <p>{error.message}</p>
-      <button onClick={reset}>Try again</button>
-    </div>
-  )}
-  onError={(error, info) => console.error(error, info)}
-  tags={{ section: 'checkout' }}
+    fallback={({ error, reset }) => (
+        <div>
+            <h1>Something broke.</h1>
+            <button onClick={reset}>Try again</button>
+        </div>
+    )}
 >
-  <CheckoutFlow />
+    <Routes />
 </ReliableErrorBoundary>
 ```
 
-## Hooks
+### Hooks
 
-### `useIdentify(user)`
+```ts
+import {
+    useReliable,           // → the active ReliableClient
+    useIdentify,           // → call identify on mount / on user change
+    useCaptureException,   // → stable captureException reference
+    useCaptureMessage,     // → stable captureMessage reference
+    useAddBreadcrumb,      // → stable addBreadcrumb reference
+    useSetTag,             // → stable setTag reference
+    useSetTags,            // → stable setTags reference
+    useFlush,              // → stable flush reference
+} from '@reliableapp/react';
+```
 
-Calls `identify()` on mount and whenever `user.externalId` changes. Pass `null` when the user isn't logged in.
+Example:
 
 ```tsx
-function App() {
-  const { user } = useAuth();
-  useIdentify(user ? { externalId: user.id, email: user.email } : null);
-  return <Routes />;
+function Checkout() {
+    const captureException = useCaptureException();
+
+    const onSubmit = async () => {
+        try {
+            await placeOrder();
+        } catch (err) {
+            captureException(err, { severity: 'high', tags: { step: 'submit' } });
+            throw err;
+        }
+    };
+
+    // ...
 }
 ```
 
-### `useCaptureException()` / `useCaptureMessage()`
-
-Stable references to the manual capture functions — safe to put in dependency arrays.
-
 ```tsx
-const captureException = useCaptureException();
-
-async function handleSubmit() {
-  try {
-    await submitOrder();
-  } catch (err) {
-    captureException(err, { severity: 'high', tags: { flow: 'checkout' } });
-  }
+function AuthSync({ user }: { user: User | null }) {
+    useIdentify(user
+        ? { externalId: user.id, email: user.email, name: user.name }
+        : null);
+    return null;
 }
 ```
 
-### `useAddBreadcrumb()`
+### Router adapters
+
+```ts
+import {
+    useReliableRouter,            // generic — call from any router on path change
+    useReliableNextPagesRouter,   // Next.js Pages Router (next/router)
+} from '@reliableapp/react';
+```
+
+The adapters push navigation breadcrumbs and update `getCurrentPath()`
+so subsequent errors / vitals / network events know which route they
+fired from. Mount once at the root of the routed subtree.
+
+For the Next.js App Router or React Router v6, use
+`useReliableRouter()` with the relevant location hook:
 
 ```tsx
-const addBreadcrumb = useAddBreadcrumb();
+// Next.js App Router
+'use client';
+import { usePathname } from 'next/navigation';
+import { useReliableRouter } from '@reliableapp/react';
 
-function StepWizard() {
-  const goToStep = (step: number) => {
-    addBreadcrumb({ category: 'ui', message: `step ${step}`, level: 'info' });
-    setStep(step);
-  };
+export function ReliableNavSync() {
+    useReliableRouter(usePathname());
+    return null;
 }
 ```
-
-### `useSetTag()` / `useSetTags()`
-
-Attach tags to all future events from this session.
-
-```tsx
-const setTag = useSetTag();
-useEffect(() => { setTag('plan', user.plan); }, [user.plan]);
-```
-
-### `useReliable()`
-
-Returns the raw `ReliableClient` from context if you need direct access.
-
-```tsx
-const client = useReliable();
-client?.flush();
-```
-
-## Router adapters
-
-### `useReliableRouter(pathname)` — generic
-
-Works with any router. Pass the current pathname string.
 
 ```tsx
 // React Router v6
 import { useLocation } from 'react-router-dom';
 import { useReliableRouter } from '@reliableapp/react';
 
-function RouterSync() {
-  const { pathname, search } = useLocation();
-  useReliableRouter(pathname + search);
-  return null;
+export function ReliableNavSync() {
+    useReliableRouter(useLocation().pathname);
+    return null;
 }
 ```
 
-```tsx
-// Next.js App Router — add to your root layout
-'use client';
-import { usePathname, useSearchParams } from 'next/navigation';
-import { useReliableRouter } from '@reliableapp/react';
+## Re-exported from core
 
-export function ReliableRouterSync() {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  useReliableRouter(pathname + (searchParams.toString() ? '?' + searchParams.toString() : ''));
-  return null;
-}
-```
-
-### `useReliableNextPagesRouter(router)` — Next.js Pages Router
-
-```tsx
-// pages/_app.tsx
-import { useRouter } from 'next/router';
-import { useReliableNextPagesRouter } from '@reliableapp/react';
-
-export default function MyApp({ Component, pageProps }) {
-  const router = useRouter();
-  useReliableNextPagesRouter(router);
-  return <Component {...pageProps} />;
-}
-```
-
-## Core API re-exports
-
-You don't need to install `@reliableapp/frontend-core` separately — everything is re-exported:
+Everything in [`@reliableapp/frontend-core`](https://www.npmjs.com/package/@reliableapp/frontend-core)
+is re-exported, so you don't need a second install:
 
 ```ts
 import {
-  init, getClient, identify,
-  setTag, setTags, addBreadcrumb,
-  flush, captureException, captureMessage,
+    init, getClient, identify, setTag, setTags,
+    addBreadcrumb, flush, captureException, captureMessage,
+    type ReliableConfig, type ReliableClient, type UserIdentity,
+    type CaptureOptions, type CaptureMessageOptions,
 } from '@reliableapp/react';
 ```
 
----
+## Contributing
 
-**Docs:** [reliable.ziloris.com/docs](https://reliable.ziloris.com/docs) · **Built by:** [Ziloris](https://ziloris.com)
+Issues, discussions, and PRs welcome on the
+[`reliable-sdk`](https://github.com/ziloris-project/reliable-sdk) repo.
+Releases are driven by [Changesets](https://github.com/changesets/changesets) —
+see the [core README](../core/README.md#contributing) for the workflow.
+
+## License
+
+[MIT](./LICENSE) © [Ziloris](https://ziloris.com)

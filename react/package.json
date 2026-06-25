@@ -1,7 +1,33 @@
 {
     "name": "@reliableapp/react",
     "version": "1.1.0",
-    "description": "Reliable browser SDK — React bindings (Provider, ErrorBoundary, hooks, router).",
+    "description": "React bindings for Reliable — Provider, ErrorBoundary with component stacks, hooks, and router adapters. Re-exports the full core SDK.",
+    "license": "MIT",
+    "homepage": "https://github.com/ziloris-project/reliable-sdk/tree/main/react#readme",
+    "bugs": {
+        "url": "https://github.com/ziloris-project/reliable-sdk/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ziloris-project/reliable-sdk.git",
+        "directory": "react"
+    },
+    "author": {
+        "name": "Ziloris",
+        "url": "https://ziloris.com"
+    },
+    "keywords": [
+        "react",
+        "reactjs",
+        "nextjs",
+        "react-error-boundary",
+        "observability",
+        "error-tracking",
+        "session-replay",
+        "monitoring",
+        "reliable",
+        "ziloris"
+    ],
     "type": "module",
     "main": "./dist/index.cjs",
     "module": "./dist/index.js",
@@ -14,7 +40,9 @@
         }
     },
     "files": [
-        "dist"
+        "dist",
+        "README.md",
+        "LICENSE"
     ],
     "sideEffects": false,
     "scripts": {
@@ -22,6 +50,10 @@
         "dev": "tsup --watch",
         "typecheck": "tsc --noEmit",
         "clean": "rm -rf dist"
+    },
+    "publishConfig": {
+        "access": "public",
+        "provenance": true
     },
     "dependencies": {
         "@reliableapp/frontend-core": "^1.1.0"
@@ -32,8 +64,5 @@
     "devDependencies": {
         "@types/react": "^18.2.0",
         "react": "^18.2.0"
-    },
-    "publishConfig": {
-        "access": "public"
     }
 }

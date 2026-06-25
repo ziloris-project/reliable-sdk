@@ -53,10 +53,11 @@ jobs:
           # changed since the last release.
           fetch-depth: 0
 
+      # pnpm version is read from package.json#packageManager. Don't
+      # set `version:` here — pnpm/action-setup errors out if both are
+      # specified.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node
         uses: actions/setup-node@v4

@@ -40,28 +40,95 @@ pnpm typecheck         # typecheck every package
 pnpm dev               # watch-mode build for every package
 ```
 
-### Adding a change that ships in a release
+### Shipping a release
+
+The release loop is fully driven by Changesets + GitHub Actions. There
+is no manual `npm publish`, no version bumping by hand, no long-lived
+npm token in the publish path.
+
+**1. Branch + code.**
 
 ```bash
-pnpm changeset         # interactive — pick affected packages + semver
-git add .changeset/*.md
-git commit -m "feat(react): ..."
+git checkout -b feat/network-timing-percentiles
+# ...edit core/src/...
 ```
 
-CI handles versioning and publishing:
+**2. Author a changeset alongside the code change.**
 
-1. Push to `main`. The Release workflow runs.
-2. If pending changesets exist, the workflow opens a "Version Packages"
-   PR that bumps versions, regenerates each package's `CHANGELOG.md`,
-   and propagates internal dep ranges (`@reliableapp/react`'s pin on
-   `@reliableapp/frontend-core` stays accurate).
-3. Merging that PR re-runs the workflow, this time with no pending
-   changesets. The action publishes to npm with sigstore provenance.
+```bash
+pnpm changeset
+```
 
-No manual `npm publish` ever. Reviewers see the changelog as part of
-PR review, and the published artifacts on npmjs.com carry verified
-provenance attestation linking each one to the exact commit + workflow
-run.
+The interactive prompt asks for:
+
+- *Which packages changed?* Space-select. `@reliableapp/frontend-core`
+  and `@reliableapp/react` are linked, so picking one bumps both — but
+  still select both if both surfaces actually changed (more accurate
+  CHANGELOG attribution).
+- *Bump type?* `patch` for fixes, `minor` for new features, `major` for
+  breaking API changes. When in doubt, `patch` — cheap insurance.
+- *Summary.* One line that lands in `CHANGELOG.md`. Write it for SDK
+  consumers, not for the team.
+
+Commit the generated `.changeset/*.md` alongside the code:
+
+```bash
+git add -A
+git commit -m "feat(core): network timing p50/p95/p99"
+```
+
+**3. Open a PR.**
+
+```bash
+git push -u origin feat/network-timing-percentiles
+gh pr create --fill
+```
+
+CI runs automatically on the PR: typecheck, build, and `npm publish
+--dry-run` for every changed package. All three must pass — branch
+protection on `main` blocks the merge otherwise. Reviewers see the
+proposed CHANGELOG entry in the diff.
+
+**4. Merge to main → bot opens "Version Packages" PR.**
+
+The Release workflow sees the pending `.changeset/*.md` file and opens
+a PR titled `chore(release): version packages`. This PR:
+
+- Bumps each affected package's `version` in `package.json`
+- Regenerates each `CHANGELOG.md`
+- Updates the internal `workspace:^` pins (e.g. `@reliableapp/react`'s
+  dep on `@reliableapp/frontend-core`)
+- Deletes the consumed `.changeset/*.md` files
+
+CI runs against this PR too (the workflow uses `CHANGESETS_PAT`, so
+the bot's PR isn't blocked by GitHub's bot-PR-no-CI rule). Review the
+version bumps + changelog, then merge.
+
+**5. Merge the Version PR → publish.**
+
+The Release workflow re-runs. With no pending changesets, it executes
+`pnpm release` → `changeset publish` → npm. Each artifact is signed
+with sigstore provenance; npmjs.com renders a verified badge linking
+the published tarball to this exact workflow run + commit.
+
+#### Auth model for the publish
+
+The workflow does **not** use a long-lived npm token for publishing.
+Each publish call presents a fresh GitHub OIDC token to npm; npm
+verifies the `repository`, `workflow_ref`, and `environment` claims
+against the trusted publisher configured on each package
+(`ziloris-project/reliable-sdk` / `release.yml` / no environment). A
+mismatch — wrong fork, wrong branch, manually-triggered run — is
+rejected. `NPM_TOKEN` is still set as a workflow secret because
+`changesets/action` requires its env check, but it is no longer the
+authorization for the registry write.
+
+#### When to skip a changeset
+
+Some changes don't ship — docs typos, CI tweaks, internal refactors
+with no consumer-facing impact. For those, open the PR without
+`pnpm changeset`. The Release workflow will run on the merge, see no
+pending changesets, and exit cleanly. Nothing publishes.
 
 ## Privacy
 

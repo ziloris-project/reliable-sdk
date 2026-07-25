@@ -24,7 +24,7 @@
         "clean": "pnpm -r clean",
         "changeset": "changeset",
         "version": "changeset version && pnpm install --lockfile-only",
-        "release": "pnpm build && changeset publish"
+        "release": "pnpm build && pnpm -r publish --no-git-checks --access public"
     },
     "devDependencies": {
         "@changesets/cli": "^2.31.0",

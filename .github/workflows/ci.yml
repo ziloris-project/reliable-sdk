@@ -40,6 +40,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Build first so each package's dist types exist. @reliableapp/react
+      # imports @reliableapp/frontend-core, whose `types` entry points at
+      # ./dist/index.d.ts — without a build that module can't be resolved and
+      # react's tsc fails with TS2307. (The build job proves the same command
+      # works; typecheck just needed the artifacts too.)
+      - run: pnpm -r build
+
       - run: pnpm -r typecheck
 
   build:

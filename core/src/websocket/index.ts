@@ -65,6 +65,23 @@ export function initWebSocket(ctx: SdkContext): void {
         return count; // count BEFORE this open — so 0 = first, 1 = first reconnect, etc.
     }
 
+    // Connections still open at page-unload. A long-lived socket often never
+    // fires 'close' before the page dies, so without flushing it here the
+    // dataset skews toward connections that happened to close mid-session and
+    // the always-on connection (the one you most want to watch) is invisible.
+    const liveConnections = new Set<() => void>();
+    let unloadHooked = false;
+    function hookUnloadFlush(): void {
+        if (unloadHooked) return;
+        unloadHooked = true;
+        window.addEventListener('pagehide', () => {
+            for (const flush of Array.from(liveConnections)) {
+                try { flush(); } catch { /* one bad flush can't block the rest */ }
+            }
+            liveConnections.clear();
+        });
+    }
+
     const PatchedWS = function PatchedWebSocket(
         this: WebSocket,
         url: string | URL,
@@ -97,6 +114,10 @@ export function initWebSocket(ctx: SdkContext): void {
             bytesReceived: 0,
             errorCount: 0,
             flushed: false,
+            // Negotiated subprotocol (ws.protocol, readable after open) — the
+            // one the SERVER accepted, vs `protocols` which is what we asked
+            // for. Empty string means none negotiated.
+            negotiatedProtocol: null as string | null,
         };
 
         // L2/L3 anomaly aggregator — accumulates fingerprint counters,
@@ -115,12 +136,69 @@ export function initWebSocket(ctx: SdkContext): void {
         // ── lifecycle listeners (added via addEventListener so we don't
         //    clobber whatever the user assigns to onopen/onerror/onclose).
 
+        ws.addEventListener('open', () => {
+            meta.negotiatedProtocol = ws.protocol || null;
+            hookUnloadFlush();
+        });
+
         ws.addEventListener('message', (ev: MessageEvent) => {
             const size = sizeOfMessage(ev.data);
             meta.messagesReceived++;
             meta.bytesReceived += size;
             aggregator.observeIncoming(ev.data, size, Date.now());
         });
+
+        // Register a flush for page-unload. Removed on normal close.
+        const unloadFlush = () => {
+            if (meta.flushed) return;
+            meta.flushed = true;
+            emitLifecycle(null, null, false); // still open at unload
+        };
+        liveConnections.add(unloadFlush);
+
+        // Shared lifecycle emit — used by both the normal 'close' handler and
+        // the unload flush. closeCode null = still open when the page unloaded.
+        function emitLifecycle(closeCode: number | null, closeReason: string | null, hadError: boolean): void {
+            const closedAtMs = Date.now();
+            capture('/websocket', {
+                uuid: connUuid,
+                url: safeUrl,
+                url_template: template,
+                protocols: protocolsArr,
+                subprotocol: meta.negotiatedProtocol,
+
+                opened_at: meta.openedAt,
+                closed_at: closeCode === null ? null : new Date(closedAtMs).toISOString(),
+                duration_ms: Math.max(0, closedAtMs - startWall),
+                unloaded: closeCode === null, // still open when the page unloaded
+
+                close_code: closeCode,
+                close_reason: closeReason,
+                had_error: hadError,
+                error_count: meta.errorCount,
+
+                messages_sent: meta.messagesSent,
+                messages_received: meta.messagesReceived,
+                bytes_sent: meta.bytesSent,
+                bytes_received: meta.bytesReceived,
+
+                reconnect_count: meta.reconnectCount,
+
+                path,
+                occurred_at: nowIso(),
+            });
+
+            if (meta.messagesSent > 0 || meta.messagesReceived > 0) {
+                capture('/websocket/sketch', {
+                    ws_uuid: connUuid,
+                    url: safeUrl,
+                    url_template: template,
+                    path,
+                    occurred_at: nowIso(),
+                    ...aggregator.toEnvelope(),
+                });
+            }
+        }
 
         ws.addEventListener('error', () => {
             meta.errorCount++;
@@ -134,10 +212,10 @@ export function initWebSocket(ctx: SdkContext): void {
         });
 
         ws.addEventListener('close', (ev: CloseEvent) => {
+            liveConnections.delete(unloadFlush);
             if (meta.flushed) return;
             meta.flushed = true;
 
-            const closedAtMs = Date.now();
             const closeCode = typeof ev.code === 'number' ? ev.code : null;
             const cleanClose = closeCode != null && CLEAN_CLOSE_CODES.has(closeCode);
             // If we never saw an explicit `error` event but the close code
@@ -155,50 +233,7 @@ export function initWebSocket(ctx: SdkContext): void {
                 });
             }
 
-            capture('/websocket', {
-                uuid: connUuid,
-                url: safeUrl,
-                url_template: template,
-                protocols: protocolsArr,
-
-                opened_at: meta.openedAt,
-                closed_at: new Date(closedAtMs).toISOString(),
-                duration_ms: Math.max(0, closedAtMs - startWall),
-
-                close_code: closeCode,
-                close_reason: ev.reason || null,
-                had_error: hadError,
-                error_count: meta.errorCount,
-
-                messages_sent: meta.messagesSent,
-                messages_received: meta.messagesReceived,
-                bytes_sent: meta.bytesSent,
-                bytes_received: meta.bytesReceived,
-
-                reconnect_count: meta.reconnectCount,
-
-                path,
-                occurred_at: nowIso(),
-            });
-
-            // L2/L3 sketch envelope — emitted alongside the L1 lifecycle
-            // capture. Skipped if we never observed a message (counter +
-            // sketch maps are empty; backend would only count an empty
-            // session toward calibration which is technically correct but
-            // not useful). Top-level fields mirror the /websocket payload
-            // so the backend can link the rollup to the session row by
-            // ws_uuid and stamp `(page, template)` baselines per project.
-            if (meta.messagesSent > 0 || meta.messagesReceived > 0) {
-                capture('/websocket/sketch', {
-                    ws_uuid: connUuid,
-                    url: safeUrl,
-                    url_template: template,
-                    path,
-                    occurred_at: nowIso(),
-                    ...aggregator.toEnvelope(),
-                });
-            }
-
+            emitLifecycle(closeCode, ev.reason || null, hadError);
             logger.debug('websocket close', closeCode, safeUrl, `${meta.messagesSent}↑/${meta.messagesReceived}↓`);
         });
 

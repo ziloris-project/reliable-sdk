@@ -265,6 +265,9 @@ function captureNormalizedError(err: NormalizedError): string | null {
         browser_state: collectBrowserState(),
         breadcrumbs: crumbs,
         tags: mergedTags,
+        // UUID of the request that plausibly caused this error, so the backend
+        // can link the error to its failing network call (the Network tab).
+        network_event_uuid: correlatedNetworkUuid(),
         occurred_at: nowIso(),
     });
 
@@ -331,11 +334,7 @@ function classifyTrigger(
     const nowMs = Date.now();
     if (nowMs - pageLoadedAt < PAGE_LOAD_WINDOW_MS) return 'page_load';
 
-    const net = getRecentNetwork();
-    if (net.length) {
-        const last = net[net.length - 1]!;
-        if (nowMs - last.finishedAt < API_TRIGGER_WINDOW_MS) return 'api_response';
-    }
+    if (recentNetworkWithinWindow(nowMs)) return 'api_response';
 
     for (let i = crumbs.length - 1; i >= 0; i--) {
         const c = crumbs[i]!;
@@ -344,6 +343,22 @@ function classifyTrigger(
     }
 
     return 'unknown';
+}
+
+/** The most recent captured network event, if one finished within the
+ *  api-trigger window — i.e. the request that plausibly caused this error. */
+function recentNetworkWithinWindow(nowMs: number): { eventUuid: string } | null {
+    const net = getRecentNetwork();
+    if (!net.length) return null;
+    const last = net[net.length - 1]!;
+    return nowMs - last.finishedAt < API_TRIGGER_WINDOW_MS ? last : null;
+}
+
+/** UUID of the network event correlated with this error (for the backend to
+ *  link error_events.network_event_id → the failing request). Null unless a
+ *  request finished within the trigger window. */
+function correlatedNetworkUuid(): string | null {
+    return recentNetworkWithinWindow(Date.now())?.eventUuid ?? null;
 }
 
 /** Grab what's visible on document.cookie and localStorage. Values are scrubbed

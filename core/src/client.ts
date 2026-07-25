@@ -9,6 +9,7 @@ import { resolveConfig } from './config';
 import type { SdkContext } from './context';
 import { createScope } from './scope';
 import { createSessionManager, type SessionState } from './session';
+import { getVisitorId } from './session/visitor';
 import { createTransport } from './transport';
 import type { ReliableClient, ReliableConfig, UserIdentity } from './types';
 import { initClicks } from './clicks';
@@ -71,6 +72,10 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
         capture('/sessions', {
             uuid: state.uuid,
             session_uuid: state.uuid,
+            // Persistent anonymous visitor id (localStorage) — stable across
+            // tabs and revisits, so the backend can count real unique visitors
+            // and returning cohorts instead of per-tab sessions.
+            anonymous_id: getVisitorId(),
             started_at: new Date(state.started_at).toISOString(),
             user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
             sdk_version: '0.0.0',

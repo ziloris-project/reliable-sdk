@@ -14,6 +14,7 @@
 //   • url_template — a normalized path with numeric/UUID segments → ":id"
 
 import type { SdkContext } from '../context';
+import { markNetworkStart } from '../activity';
 import { getCurrentPath } from '../navigation';
 import { triggerReplayFlush } from '../replay';
 import { scrubUrl, scrubHeaders, scrubString } from '../scrub';
@@ -123,6 +124,7 @@ export function initNetwork(ctx: SdkContext): void {
         const method = (init?.method ?? (typeof input === 'object' && 'method' in input ? (input as Request).method : null) ?? 'GET');
 
         if (isSelf(url)) return origFetch.call(window, input, init);
+        markNetworkStart();
 
         const reqHeaders = scrubHeaders(readHeaders(init?.headers));
         const reqBody = truncateBody(readBody(init?.body));
@@ -190,6 +192,7 @@ export function initNetwork(ctx: SdkContext): void {
         const method = meta.__rl_method ?? 'GET';
 
         if (isSelf(url)) return origSend.call(this, body);
+        markNetworkStart();
 
         const reqHeaders = scrubHeaders(meta.__rl_reqHeaders ?? {});
         const reqBody = truncateBody(readBody(body as BodyInit | null | undefined));

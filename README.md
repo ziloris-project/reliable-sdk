@@ -107,9 +107,15 @@ version bumps + changelog, then merge.
 **5. Merge the Version PR → publish.**
 
 The Release workflow re-runs. With no pending changesets, it executes
-`pnpm release` → `changeset publish` → npm. Each artifact is signed
-with sigstore provenance; npmjs.com renders a verified badge linking
-the published tarball to this exact workflow run + commit.
+`pnpm release`: build, `pnpm -r publish` to npm, then `changeset tag`.
+Each artifact is signed with sigstore provenance; npmjs.com renders a
+verified badge linking the published tarball to this exact workflow run
++ commit. `changeset tag` creates a git tag per published version and
+prints `New tag: <package>@<version>`, which is what the changesets
+action reads to push the tags and create a GitHub Release per package
+from its CHANGELOG entry. (`pnpm -r publish` alone prints no such
+lines, so without the tag step npm gets the release but GitHub does
+not.)
 
 #### Auth model for the publish
 

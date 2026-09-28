@@ -39,9 +39,12 @@ export interface TransportDeps {
     logger: Logger;
     /** Called on every enqueue to check the per-session sampling decision. */
     isSampled: () => boolean;
+    /** The backend sampled this session out (the project's sample-rate
+     *  setting). The session should go dark. */
+    onSampledOut?: (sessionUuid: string) => void;
 }
 
-export function createTransport({ config, logger, isSampled }: TransportDeps): Transport {
+export function createTransport({ config, logger, isSampled, onSampledOut }: TransportDeps): Transport {
     const queue = createQueue();
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let lifecycleBound = false;
@@ -99,10 +102,31 @@ export function createTransport({ config, logger, isSampled }: TransportDeps): T
         // event can reference it via session_uuid. Send /sessions first,
         // wait for it to land, then fire everything else in parallel.
         const sessions = batch.filter((e) => e.path === '/sessions');
-        const rest     = batch.filter((e) => e.path !== '/sessions');
+        let rest       = batch.filter((e) => e.path !== '/sessions');
 
+        // The backend applies the project's sample-rate setting per session
+        // and answers a sampled-out session start with `sampled: false`.
+        // Drop that session's other events from this batch, and let the
+        // session go dark so nothing else is sent for it.
+        const sampledOut = new Set<string>();
         if (sessions.length > 0) {
-            await Promise.all(sessions.map((e) => sendEvent(config, e, opts)));
+            await Promise.all(sessions.map(async (e) => {
+                const res = await sendEvent(config, e, opts);
+                if (!res || !res.ok) return;
+                try {
+                    const body = await res.clone().json() as { data?: { sampled?: boolean } };
+                    const uuid = e.payload['uuid'];
+                    if (body?.data?.sampled === false && typeof uuid === 'string') {
+                        sampledOut.add(uuid);
+                        onSampledOut?.(uuid);
+                    }
+                } catch {
+                    // Not JSON (older backend): nothing to learn.
+                }
+            }));
+        }
+        if (sampledOut.size > 0) {
+            rest = rest.filter((e) => !sampledOut.has(String(e.payload['session_uuid'])));
         }
         if (rest.length > 0) {
             await Promise.all(rest.map((e) => sendEvent(config, e, opts)));

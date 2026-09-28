@@ -17,14 +17,15 @@ export interface SendOptions {
     unloading?: boolean;
 }
 
+/** Resolves to the final response (null on a network error or unserialisable payload). */
 export async function sendEvent(
     config: ResolvedConfig,
     event: OutboundEvent,
     opts: SendOptions = {},
-): Promise<boolean> {
+): Promise<Response | null> {
     const url = `${config.endpoint}${event.path}`;
     const body = safeStringify(event.payload);
-    if (body === null) return false;
+    if (body === null) return null;
 
     const attempt = async (): Promise<Response | null> => {
         try {
@@ -49,7 +50,7 @@ export async function sendEvent(
         await delay(500);
         res = await attempt();
     }
-    return Boolean(res && res.ok);
+    return res;
 }
 
 function shouldRetry(res: Response | null): boolean {

@@ -48,6 +48,8 @@ export interface SessionManager {
     touch(): void;
     rotate(reason: RotateReason): SessionState;
     attachUser(externalId: string): { rotated: boolean; state: SessionState };
+    /** The backend sampled this session out: stop sending for the rest of it. */
+    markSampledOut(uuid: string): void;
     isFresh(): boolean;
     onRotate(cb: (state: SessionState, reason: RotateReason) => void): () => void;
 }
@@ -162,11 +164,20 @@ export function createSessionManager({ config }: SessionManagerDeps): SessionMan
         return { rotated, state };
     }
 
+    function markSampledOut(uuid: string): void {
+        sync();
+        if (state.uuid !== uuid || !state.sampled) return;
+        state.sampled = false;
+        writeRawSession(state);
+        lastWriteAt = now();
+    }
+
     return {
         current,
         touch,
         rotate,
         attachUser,
+        markSampledOut,
         isFresh: () => fresh,
         onRotate(cb) {
             rotateListeners.add(cb);

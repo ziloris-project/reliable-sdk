@@ -80,6 +80,7 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
         config,
         logger,
         isSampled: () => session.current().sampled,
+        onSampledOut: (uuid) => session.markSampledOut(uuid),
     });
     transport.attachLifecycle();
 

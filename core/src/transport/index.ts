@@ -4,6 +4,13 @@
 //   - FLUSH_DEBOUNCE_MS after the most recent enqueue
 //   - visibilitychange -> hidden
 //   - pagehide
+//   - prerenderingchange (a prerendered page becoming visible)
+//
+// Nothing is sent while the page is being prerendered. Chrome prerenders
+// pages it predicts you will open (from the address bar or speculation
+// rules), running their scripts; most are never shown. Sending from them
+// counted visits and page views that no person saw. Events are held and go
+// out when the page is activated, or never, if it is discarded.
 //
 // Everything downstream (sampling gate, beforeSend hook, self-ignore,
 // retries) is either filtered here or delegated to `send.ts`. Feature
@@ -83,6 +90,7 @@ export function createTransport({ config, logger, isSampled }: TransportDeps): T
 
     async function flush(opts: { unloading?: boolean } = {}): Promise<void> {
         clearDebounce();
+        if (isPrerendering()) return;
         const batch = queue.drain();
         if (batch.length === 0) return;
         logger.debug('flush', batch.length, 'events', opts.unloading ? '(unloading)' : '');
@@ -107,6 +115,7 @@ export function createTransport({ config, logger, isSampled }: TransportDeps): T
 
         document.addEventListener('visibilitychange', onVisibility);
         window.addEventListener('pagehide', onPageHide);
+        document.addEventListener('prerenderingchange', onActivated);
         lifecycleBound = true;
     }
 
@@ -115,6 +124,7 @@ export function createTransport({ config, logger, isSampled }: TransportDeps): T
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
         document.removeEventListener('visibilitychange', onVisibility);
         window.removeEventListener('pagehide', onPageHide);
+        document.removeEventListener('prerenderingchange', onActivated);
         lifecycleBound = false;
     }
 
@@ -126,7 +136,16 @@ export function createTransport({ config, logger, isSampled }: TransportDeps): T
         void flush({ unloading: true });
     }
 
+    function onActivated(): void {
+        void flush();
+    }
+
     return { enqueue, flush, attachLifecycle, detachLifecycle };
+}
+
+function isPrerendering(): boolean {
+    return typeof document !== 'undefined'
+        && (document as Document & { prerendering?: boolean }).prerendering === true;
 }
 
 function safeHost(url: string): string | null {

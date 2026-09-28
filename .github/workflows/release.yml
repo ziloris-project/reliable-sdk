@@ -14,7 +14,10 @@
 #      changeset files.
 #   3. Merging the Version Packages PR triggers this workflow again. This
 #      time there are no pending changesets, so the action runs the
-#      publish step instead: `pnpm release` → `changeset publish` → npm.
+#      publish step instead: `pnpm release` → build, `pnpm -r publish`
+#      to npm, then `changeset tag`. The tag step prints "New tag:" lines,
+#      which is how this action knows to push tags and create a GitHub
+#      Release per package; `pnpm -r publish` alone prints none.
 #   4. Each publish is signed with sigstore provenance so npmjs.com
 #      renders a verified attestation badge linking the artifact to this
 #      exact workflow run.

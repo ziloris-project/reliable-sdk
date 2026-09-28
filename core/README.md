@@ -61,13 +61,13 @@ and the events will start landing within seconds.
 | `errors` | ✅ on | `window.error`, `unhandledrejection`, manual `captureException`. Stack normalisation + fingerprinting + de-dup. |
 | `vitals` | ✅ on | LCP / INP / CLS / TTFB / FCP via [`web-vitals`](https://github.com/GoogleChrome/web-vitals). Reported per page change. |
 | `network` | ✅ on | `fetch` + `XHR` monkey-patch. Failures only by default; opt in to all requests with `captureAllRequests`. |
-| `clicks` | ✅ on | Click breadcrumbs only — coordinates and a CSS-path-style selector, never the click target's text. |
+| `clicks` | ✅ on | Dead and rage clicks on buttons and links: a CSS-path-style selector, coordinates, and up to 80 characters of the element's visible text. Clicks that get a response (DOM change, navigation, scroll, focus change, request) are not sent. |
 | `navigation` | ✅ on | History and `popstate` listening. Exposes `getCurrentPath()` other modules read. |
 | `replay` | ✅ on | rrweb session recording. Last 30 s + 10 s post-error flush. |
 | `console` | ✅ on | `console.error` and `console.warn` surfaced as soft errors. The SDK's own logs are excluded. |
 | `websocket` | ✅ on | One row per WebSocket connection: open / close / reconnect storms / message and byte counts. Post-open errors flow into the errors pipeline. |
 | `breadcrumbs` | — | Ring buffer of the last 30 breadcrumbs, attached to every error. |
-| `session` | — | One session UUID per browser session, rotated on long idle. |
+| `session` | — | One session per visit: shared by every tab, ended by 30 minutes without user activity. Background requests never start or extend a visit. |
 
 Anything you don't want, toggle off:
 

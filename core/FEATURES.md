@@ -73,18 +73,30 @@ mean what they say.
 - If the session loses the roll, the SDK goes into "dark mode":
   transport is a no-op, but hooks still install so identify / tags work.
 - Decision is cached on the session object — every event in the session
-  is kept or dropped together (no half-sampled sessions).
+  is kept or dropped together (no half-sampled sessions). Replays too.
+- The project's **sample rate setting** (dashboard) applies on top,
+  server-side: the backend decides per session from its UUID, drops
+  everything for sampled-out sessions, and answers the session start with
+  `sampled: false`. The SDK then drops that session's queued events and
+  marks it dark, so it stops sending after its first request.
 
 ### 0.5 Scope & identify
 - `reliable.identify({ externalId, email?, name?, traits? })` → attaches
   user to current session; fires `POST /ingest/identify`.
 - `reliable.setTag(key, value)` / `setTags({})` → merged into every event.
 - `reliable.addBreadcrumb({ category, message, level, data })` → in-memory
-  ring buffer of last 30, attached to error events for context.
+  ring buffer of last 30, attached to error events for context. Clicks
+  (selector, tag, coordinates, never text) and route changes are added
+  automatically. An error is only attributed to a click or route change
+  from the last second.
 
 ### 0.6 Scrubbers
 - PII regex on strings: email, credit card, SSN-ish patterns → replaced with `[redacted]`.
-- URL sanitizer: strip query params in a denylist (`token`, `auth`, `sid`, etc.).
+- URL sanitizer: redact query params in a denylist (`token`, `auth`, `sid`, etc.).
+- Path scrubber: every page path the SDK reports (`getCurrentPath()`,
+  navigation from/to, the session's entry path and referrer) redacts those
+  params and removes emails, including percent-encoded ones.
+- Selector scrubber: emails removed, UUIDs and long digit runs collapsed.
 - Header denylist on network capture: never send `Authorization`, `Cookie`, `Set-Cookie`.
 - Pluggable: `init({ beforeSend: (event) => event | null })` lets the app
   drop or mutate events before they leave.
@@ -325,12 +337,18 @@ DOM serializer. Records a full snapshot on start, then incremental mutations.
      than `now - 60_000ms`.
 3. Store the ring buffer in **IndexedDB** (not memory alone) so it
    survives soft navigations and doesn't balloon the JS heap.
-   - DB name: `reliable_replay`, object store: `events`.
+   - DB name: `reliable_replay_v2`, object store: `events`, indexed by
+     `timestamp` (pruning) and `[tab, timestamp]` (reads).
+   - **Per tab**: every event is stored with the recording tab's id (kept
+     in `sessionStorage`, so it survives reloads of that tab), and a flush
+     reads only its own tab. The database is shared by every tab of the
+     site, so without this two open tabs mixed into one replay.
    - Write in batches (every 500ms or 50 events, whichever comes first)
      to reduce IDB write pressure.
    - On prune, delete old entries by timestamp index.
-4. **Trigger flush** — when the error module or any notable event fires:
-   - Read the full 60s window from IndexedDB.
+4. **Trigger flush** — when the error module or any notable event fires,
+   and only for sampled sessions:
+   - Read this tab's 60s window from IndexedDB.
    - Compress with `pako` (gzip) to keep payload size sane.
    - POST to `/ingest/replays` with `{ session_uuid, trigger_event_uuid,
      started_at, ended_at, snapshot_count, compressed_events (base64) }`.

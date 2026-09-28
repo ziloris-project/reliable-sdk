@@ -21,12 +21,39 @@ import { initVitals } from './vitals';
 import { initReplay } from './replay';
 import { initWebSocket } from './websocket';
 import { createLogger } from './util/log';
+import { isLikelyBot } from './util/bot';
+import { SDK_VERSION } from './version';
 import { nowIso } from './util/now';
 import { uuid } from './util/uuid';
 
 export interface InternalClient extends ReliableClient {
     /** Context handed to feature modules by init(). Not part of the public API. */
     readonly context: SdkContext;
+}
+
+// Events that mean a person is using the page. Only these extend the session
+// or start a new one after it has gone idle. Everything else (network,
+// WebSocket, errors, vitals) attaches to the current session as it is: a tab
+// left open with background polling must neither keep one visit alive all
+// day nor open a fresh "visit" every 30 minutes with nobody there.
+const ACTIVITY_PATHS = new Set(['/sessions', '/navigation', '/clicks', '/events', '/identify']);
+
+/** DOM events that count as the visitor being active. */
+const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'touchstart', 'scroll'] as const;
+const ACTIVITY_THROTTLE_MS = 10_000;
+
+/** document.referrer, but only when it is another site. A same-site referrer
+ *  is this site linking to itself (typically a link opened in a new tab), not
+ *  where the visit came from. */
+function externalReferrer(): string | null {
+    if (typeof document === 'undefined' || !document.referrer) return null;
+    try {
+        const ref = new URL(document.referrer);
+        if (typeof location !== 'undefined' && ref.host === location.host) return null;
+        return document.referrer;
+    } catch {
+        return null;
+    }
 }
 
 export function createClient(userConfig: ReliableConfig): InternalClient {
@@ -46,7 +73,7 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
     // Enrichment helper. Every outbound event goes through this so session
     // touching, uuid/occurred_at defaults, and sanity checks live in ONE spot.
     function capture(path: string, payload: Record<string, unknown>): void {
-        session.touch();
+        if (ACTIVITY_PATHS.has(path)) session.touch();
         const s = session.current();
         const enriched: Record<string, unknown> = {
             uuid: payload['uuid'] ?? uuid(),
@@ -61,10 +88,14 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
     }
 
     // Ensure the session row exists in the backend. The upsert is idempotent
-    // (ON CONFLICT DO UPDATE) so firing on every init — even when the session
-    // was rehydrated from sessionStorage — is harmless and guarantees child
-    // events can always resolve their session_uuid.
-    function sendSessionStart(state: SessionState): void {
+    // (ON CONFLICT DO UPDATE) so firing on every page load, even when the
+    // session was rehydrated from storage, is harmless and guarantees child
+    // events can always resolve their session_uuid. The backend keeps the
+    // first values it saw for the "initial" fields.
+    //
+    // `pageLoad` is false when a session starts mid-page (idle rotation or an
+    // identify change): the visit did not arrive from document.referrer then.
+    function sendSessionStart(state: SessionState, pageLoad: boolean): void {
         const vp = typeof window !== 'undefined'
             ? { width: window.innerWidth, height: window.innerHeight }
             : null;
@@ -78,21 +109,37 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
             anonymous_id: getVisitorId(),
             started_at: new Date(state.started_at).toISOString(),
             user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-            sdk_version: '0.0.0',
+            sdk_version: SDK_VERSION,
+            is_bot: isLikelyBot(),
             viewport_width: vp?.width ?? null,
             viewport_height: vp?.height ?? null,
-            initial_referrer: typeof document !== 'undefined' ? document.referrer || null : null,
+            initial_referrer: pageLoad ? externalReferrer() : null,
             initial_path:
                 typeof location !== 'undefined' ? location.pathname + location.search : null,
         });
     }
 
     // Always fire on init (not gated by isFresh), plus on every rotation.
-    sendSessionStart(session.current());
+    sendSessionStart(session.current(), true);
     session.onRotate((state, reason) => {
         logger.debug('session rotated', reason, state.uuid);
-        sendSessionStart(state);
+        sendSessionStart(state, false);
     });
+
+    // Real interaction keeps the visit alive (and starts a new one after an
+    // idle gap). Passive and throttled: at most one touch per 10 seconds.
+    if (typeof window !== 'undefined') {
+        let lastActivityAt = 0;
+        const onActivity = (): void => {
+            const t = Date.now();
+            if (t - lastActivityAt < ACTIVITY_THROTTLE_MS) return;
+            lastActivityAt = t;
+            session.touch();
+        };
+        for (const type of ACTIVITY_EVENTS) {
+            window.addEventListener(type, onActivity, { capture: true, passive: true });
+        }
+    }
 
     const context: SdkContext = {
         config,

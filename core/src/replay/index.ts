@@ -12,11 +12,18 @@
 //      b. Start 10s post-incident timer
 //      c. After 10s → read extended window → compress → PATCH /ingest/replays/:uuid
 //   4. Visibility hidden → pause recording (no point capturing invisible tab)
+//
+// Replays are per tab: events are stored with this tab's id and a flush only
+// reads its own tab's events, so two open tabs never mix into one replay. The
+// id lives in sessionStorage, which is per tab and survives reloads, so a
+// replay can still show the page the user reloaded or navigated away from.
+// Sessions that lost the sample roll upload no replays.
 
 import { record } from 'rrweb';
 import { deflate } from 'pako';
 import type { SdkContext } from '../context';
 import { writeEvents, pruneEvents, readEvents, type StoredEvent } from './idb';
+import { uuid } from '../util/uuid';
 
 const WINDOW_MS = 60_000;          // 60s pre-incident
 const POST_INCIDENT_MS = 10_000;   // 10s after trigger
@@ -24,7 +31,22 @@ const BATCH_INTERVAL_MS = 500;     // IDB write cadence
 const MIN_FLUSH_GAP_MS = 10_000;   // Don't flush same window twice within 10s
 const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024; // 5MB compressed limit
 
+const TAB_KEY = 'reliable:tab';
+
 let teardown: (() => void) | null = null;
+
+/** This tab's id: stable across reloads of the tab, distinct between tabs. */
+function currentTabId(): string {
+    try {
+        const existing = sessionStorage.getItem(TAB_KEY);
+        if (existing) return existing;
+        const fresh = uuid();
+        sessionStorage.setItem(TAB_KEY, fresh);
+        return fresh;
+    } catch {
+        return uuid();
+    }
+}
 
 export function initReplay(ctx: SdkContext): void {
     if (teardown) return;
@@ -32,6 +54,7 @@ export function initReplay(ctx: SdkContext): void {
     if (typeof indexedDB === 'undefined') return;
 
     const { config, session, logger } = ctx;
+    const tabId = currentTabId();
 
     // ── rrweb recording ─────────────────────────────────────────────────
 
@@ -44,7 +67,7 @@ export function initReplay(ctx: SdkContext): void {
     const stopRrweb = record({
         emit(event) {
             if (!recording) return;
-            memBatch.push({ timestamp: Date.now(), data: event });
+            memBatch.push({ timestamp: Date.now(), tab: tabId, data: event });
         },
         // Swallow internal rrweb errors (e.g. node.matches on text nodes)
         // so they don't bubble to window.onerror and trigger infinite loops.
@@ -103,6 +126,9 @@ export function initReplay(ctx: SdkContext): void {
     }
 
     async function flushInitial(triggerEventUuid: string): Promise<void> {
+        // Dark sessions (lost the sample roll, or sampled out by the project
+        // setting) send nothing else, and replays are no exception.
+        if (!session.current().sampled) return;
         const now = Date.now();
         if (now - lastFlushTime < MIN_FLUSH_GAP_MS) {
             logger.debug('replay flush skipped — too soon since last flush');
@@ -120,7 +146,7 @@ export function initReplay(ctx: SdkContext): void {
         const startTs = endTs - WINDOW_MS;
 
         try {
-            const events = await readEvents(startTs, endTs);
+            const events = await readEvents(tabId, startTs, endTs);
             if (events.length === 0) {
                 logger.debug('replay flush skipped — no events in window');
                 return;
@@ -179,7 +205,7 @@ export function initReplay(ctx: SdkContext): void {
 
             const endTs = Date.now();
             try {
-                const events = await readEvents(originalStartTs, endTs);
+                const events = await readEvents(tabId, originalStartTs, endTs);
                 if (events.length === 0) return;
 
                 const compressed = await compress(events);

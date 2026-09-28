@@ -40,16 +40,17 @@ init({
 That's it. The SDK now:
 
 - Listens for `window.error` and `unhandledrejection` and forwards every
-  crash with stack, breadcrumbs, browser state, and the last 30 seconds
-  of session replay.
+  crash with stack, breadcrumbs, browser state, and the last 60 seconds
+  of that tab's session replay.
 - Reports [Core Web Vitals](https://web.dev/vitals/) (LCP, INP, CLS,
   TTFB, FCP) every page load.
 - Captures every failed `fetch` and `XMLHttpRequest` with timing
   breakdown and response body.
-- Records click breadcrumbs (with scrubbed selectors), navigation
-  events, and WebSocket connection lifecycles.
+- Records click and navigation breadcrumbs (scrubbed selectors and
+  paths, never element text), dead and rage clicks, and WebSocket
+  connection lifecycles.
 - Buffers everything through a low-priority queue that survives
-  page-hide via `navigator.sendBeacon`.
+  page-hide via `fetch` with `keepalive`.
 
 Open your project at [reliable.ziloris.com](https://reliable.ziloris.com)
 and the events will start landing within seconds.
@@ -61,13 +62,13 @@ and the events will start landing within seconds.
 | `errors` | ✅ on | `window.error`, `unhandledrejection`, manual `captureException`. Stack normalisation + fingerprinting + de-dup. |
 | `vitals` | ✅ on | LCP / INP / CLS / TTFB / FCP via [`web-vitals`](https://github.com/GoogleChrome/web-vitals). Reported per page change. |
 | `network` | ✅ on | `fetch` + `XHR` monkey-patch. Failures only by default; opt in to all requests with `captureAllRequests`. |
-| `clicks` | ✅ on | Click breadcrumbs only — coordinates and a CSS-path-style selector, never the click target's text. |
-| `navigation` | ✅ on | History and `popstate` listening. Exposes `getCurrentPath()` other modules read. |
-| `replay` | ✅ on | rrweb session recording. Last 30 s + 10 s post-error flush. |
+| `clicks` | ✅ on | Every click becomes a breadcrumb. Dead and rage clicks on buttons and links are also sent as events. Both carry a scrubbed CSS-path-style selector and coordinates, never the element's text. Clicks that get a response (DOM change, navigation, scroll, focus change, request) are not dead. |
+| `navigation` | ✅ on | History and `popstate` listening; a page view per pathname change, and a breadcrumb per route change. Exposes `getCurrentPath()` (scrubbed) that other modules read. |
+| `replay` | ✅ on | rrweb session recording, kept separately per tab. Last 60 s + 10 s post-error flush. Sampled-out sessions upload nothing. |
 | `console` | ✅ on | `console.error` and `console.warn` surfaced as soft errors. The SDK's own logs are excluded. |
 | `websocket` | ✅ on | One row per WebSocket connection: open / close / reconnect storms / message and byte counts. Post-open errors flow into the errors pipeline. |
-| `breadcrumbs` | — | Ring buffer of the last 30 breadcrumbs, attached to every error. |
-| `session` | — | One session UUID per browser session, rotated on long idle. |
+| `breadcrumbs` | — | Ring buffer of the last 30 breadcrumbs (clicks, route changes and your own `addBreadcrumb` calls), attached to every error. |
+| `session` | — | One session per visit: shared by every tab, ended by 30 minutes without user activity. Background requests never start or extend a visit. |
 
 Anything you don't want, toggle off:
 
@@ -89,8 +90,11 @@ or message payloads. Specifically:
   own ingest key are always redacted to `[redacted]` before send.
 - **URL query params**: `token`, `access_token`, `id_token`,
   `refresh_token`, `auth`, `password`, `pwd`, `secret`, `api_key`,
-  `apikey`, `sid`, `session`, `code`, and `state` are stripped from
-  every captured URL.
+  `apikey`, `sid`, `session`, `code`, and `state` are replaced with
+  `[redacted]` in every captured URL and every page path the SDK
+  reports, and email addresses anywhere in a path are removed.
+- **Clicks**: a selector (emails removed, ids and long numbers
+  collapsed) and coordinates only. The element's text is never sent.
 - **In-body strings**: email addresses and credit-card-shaped digit
   sequences are regex-scrubbed from any captured request or response
   body.
@@ -124,7 +128,7 @@ init({
     /** Custom ingest endpoint. Leave unset to use Reliable's hosted endpoint. */
     endpoint: 'https://reliablebackend.ziloris.com/api/v1/ingest',
 
-    /** 0–100. Per-session sample dice roll. Losers go fully dark for the whole session — useful for cost control on high-traffic sites. */
+    /** 0–100. Per-session sample dice roll. Losers go fully dark for the whole session, which is useful for cost control on high-traffic sites. The project's sample rate in the dashboard also applies, server-side: a session it samples out goes dark after its first request. */
     sampleRate: 100,
 
     /** Log SDK internals to console. Off in production; turn on while integrating. */

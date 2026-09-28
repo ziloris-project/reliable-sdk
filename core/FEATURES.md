@@ -21,22 +21,37 @@ Everything the three feature groups need before a single event can fly.
 The session is the anchor every event hangs off. Get this wrong and
 per-session metrics (bounce rate, duration, engaged sessions) all break.
 
-1. On `init`, read `sessionStorage['reliable:session']`.
+A session is one **visit**: every tab of the same browser shares it, and it
+ends after 30 minutes without user activity. This is the definition analytics
+tools use, and what makes visit counts, bounce rate and returning visitors
+mean what they say.
+
+1. On `init`, read `localStorage['reliable:session']`. If it is empty, adopt a
+   session an older SDK left in `sessionStorage` (so upgrading does not split
+   a visit in two), then remove the old key.
 2. If present and not idle-expired → **reuse it**. Refreshes, route changes,
-   and tab-internal navigation all keep the same `session_uuid`.
+   new tabs and links opened in new tabs all keep the same `session_uuid`.
 3. If absent or expired → generate a new `session_uuid` (UUIDv4), stamp
-   `started_at = now`, `last_active_at = now`, persist to `sessionStorage`.
-4. First time a new session is created, fire `POST /ingest/sessions` with
-   `{ uuid, started_at, user_agent, viewport, referrer, entry_path, language, timezone }`.
-5. On every captured event, bump `last_active_at` in `sessionStorage`.
-6. **Idle rotation**: if `now - last_active_at > 30 min`, treat the session
-   as expired on the next event → rotate to a new `session_uuid` and open a
-   new session row. (The old one is already persisted server-side; nothing
-   to close out.)
+   `started_at = now`, `last_active_at = now`, persist to `localStorage`.
+   Loading a page is activity.
+4. On every page load, fire `POST /ingest/sessions` (an idempotent upsert; the
+   backend keeps the first values it saw). The payload carries the visitor id,
+   `is_bot` (crawler user agent or `navigator.webdriver`), the real SDK
+   version, and `initial_referrer`, which is only set when the referrer is
+   another site and the session starts with this page load.
+5. **Only user activity extends the session**: page views, custom events,
+   `identify()`, dead/rage clicks, and pointer, key, touch and scroll input
+   (throttled to one update per 10s, written to storage at most every 5s).
+   Background events (network, WebSocket, errors, vitals) attach to the
+   current session without extending it.
+6. **Idle rotation**: if `now - last_active_at > 30 min`, the next *activity*
+   rotates to a new `session_uuid` and opens a new session row. Background
+   events never rotate: a tab left open with polling must not open a fresh
+   "visit" every 30 minutes with nobody there.
 7. **Hard rotation on identify change**: if `identify()` is called with a
    different user than the current session is tied to, rotate.
-8. `sessionStorage` (not `localStorage`) so closing the tab ends the
-   session naturally; hard refresh keeps it.
+8. Tabs stay in sync through storage: every read adopts a session another tab
+   started, so the whole browser moves to the new visit together.
 
 ### 0.3 Transport (batching + delivery)
 - In-memory queue, flushed on these triggers:
@@ -58,18 +73,30 @@ per-session metrics (bounce rate, duration, engaged sessions) all break.
 - If the session loses the roll, the SDK goes into "dark mode":
   transport is a no-op, but hooks still install so identify / tags work.
 - Decision is cached on the session object — every event in the session
-  is kept or dropped together (no half-sampled sessions).
+  is kept or dropped together (no half-sampled sessions). Replays too.
+- The project's **sample rate setting** (dashboard) applies on top,
+  server-side: the backend decides per session from its UUID, drops
+  everything for sampled-out sessions, and answers the session start with
+  `sampled: false`. The SDK then drops that session's queued events and
+  marks it dark, so it stops sending after its first request.
 
 ### 0.5 Scope & identify
 - `reliable.identify({ externalId, email?, name?, traits? })` → attaches
   user to current session; fires `POST /ingest/identify`.
 - `reliable.setTag(key, value)` / `setTags({})` → merged into every event.
 - `reliable.addBreadcrumb({ category, message, level, data })` → in-memory
-  ring buffer of last 30, attached to error events for context.
+  ring buffer of last 30, attached to error events for context. Clicks
+  (selector, tag, coordinates, never text) and route changes are added
+  automatically. An error is only attributed to a click or route change
+  from the last second.
 
 ### 0.6 Scrubbers
 - PII regex on strings: email, credit card, SSN-ish patterns → replaced with `[redacted]`.
-- URL sanitizer: strip query params in a denylist (`token`, `auth`, `sid`, etc.).
+- URL sanitizer: redact query params in a denylist (`token`, `auth`, `sid`, etc.).
+- Path scrubber: every page path the SDK reports (`getCurrentPath()`,
+  navigation from/to, the session's entry path and referrer) redacts those
+  params and removes emails, including percent-encoded ones.
+- Selector scrubber: emails removed, UUIDs and long digit runs collapsed.
 - Header denylist on network capture: never send `Authorization`, `Cookie`, `Set-Cookie`.
 - Pluggable: `init({ beforeSend: (event) => event | null })` lets the app
   drop or mutate events before they leave.
@@ -174,27 +201,33 @@ but isn't throwing an error".
 **Dead click** = user clicks something, nothing happens.
 **Rage click** = user clicks the same spot repeatedly out of frustration.
 
+**What counts**
+- Only elements whose job is to act when clicked are judged: `a[href]`,
+  `button`, `input[type=button|submit|reset|image]`, `summary`, and
+  `[role=button|link|menuitem|tab]`. Text fields, checkboxes, selects and
+  iframes are not: focusing a field changes nothing in the DOM, and counting
+  them made about half of all dead clicks false.
+- Ignored: non-primary buttons, clicks with ctrl/cmd/shift/alt, and links
+  that open elsewhere by design (`target=_blank`, `download`, `mailto:`,
+  `tel:`, `sms:`).
+
 **Build steps**
 1. Install a single `document.addEventListener('click', handler, true)` in
    capture phase so we see the click before React handlers run.
-2. On click, record `{ target, selector, path, timestamp, x, y }`.
-3. **Rage detection**:
-   - Keep a small ring of recent clicks (last 5).
-   - If ≥3 clicks on the same `selector` within 1000ms → emit `kind: 'rage'`.
-4. **Dead detection** (harder — requires waiting):
-   - After a click, set a 300ms timeout.
-   - Listen for signs of life during that window: DOM mutation near target
-     (MutationObserver scoped to `target.closest('...')`), any `navigation`
-     event, any fetch/XHR started.
-   - If the timeout fires with no signs of life → emit `kind: 'dead'`.
-   - Cancel the timeout if any sign fires.
-5. Build a **compact CSS selector** for `target`: tag + id if present, else
-   tag + class list (truncated), walking up max 4 ancestors. Cap total
+2. Group rapid clicks on the same element into a **burst** (each within
+   1000ms of the previous).
+3. While a burst is pending, watch for any **response**: a DOM mutation
+   anywhere in the document, a URL change, a scroll, focus moving to another
+   element or window, or a network request starting (the network module
+   marks request starts; completed resource timings are the fallback).
+4. 1000ms after the burst's last click, with no response since its first
+   click: 3 or more clicks → one `kind: 'rage'` with `rage_click_count`;
+   otherwise one `kind: 'dead'` per click. Any response → nothing is sent,
+   however fast the clicks were (a working +/- stepper is not rage).
+5. Leaving the page is a response: pending bursts are dropped on `pagehide`.
+6. Build a **compact CSS selector** for the element: tag + id if present,
+   else tag + class list (truncated), walking up max 4 ancestors. Cap total
    length at 200 chars.
-6. Don't emit dead-click if the element is obviously non-interactive
-   (plain `<div>` with no handlers, text, etc. — short allowlist of
-   clickable tags: `a`, `button`, `input`, `select`, `[role=button]`,
-   anything with `onClick`).
 7. Enqueue → `POST /ingest/clicks`.
 
 ### 3B. Navigation
@@ -205,7 +238,11 @@ Track route changes in SPAs and traditional apps.
 - `kind` (`initial` | `push` | `replace` | `pop` | `reload`)
 - `from_path`, `to_path`, `occurred_at`
 - Bumps `page_views_count` on the session server-side (already handled in
-  `recordNavigation`).
+  `recordNavigation`, and only once per event even when a retry repeats it).
+- A history change is only reported when the **pathname** changes.
+  Rewriting just the query string (search boxes, filters, pagination) keeps
+  the visitor on the same page, so it is not a page view. The tracked current
+  path still follows the full URL for errors and vitals.
 
 **Build steps**
 1. On `init`:
@@ -213,8 +250,9 @@ Track route changes in SPAs and traditional apps.
    - Detect reload via `performance.getEntriesByType('navigation')[0].type === 'reload'`.
 2. Monkey-patch `history.pushState` and `history.replaceState`:
    - Before calling original, snapshot `from_path`.
-   - After calling original, emit `push` or `replace` with new `to_path`.
-3. Listen for `popstate` → emit `pop`.
+   - After calling original, emit `push` or `replace` with new `to_path`
+     when the pathname changed.
+3. Listen for `popstate` → emit `pop` when the pathname changed.
 4. Crucially: **re-arm Core Web Vitals** on each push/replace so per-route
    vitals work on SPAs (see vitals section 5).
 5. Enqueue → `POST /ingest/navigation`.
@@ -225,12 +263,18 @@ These aren't a feature to "build" — they fall out of sessions + navigation +
 activity signals the server already rolls up. The SDK just needs to make
 sure those signals flow:
 
-- `bounce_rate`: derived server-side from sessions with `page_views_count <= 1`.
-  Our job: make sure the **initial** navigation event always fires.
-- `avg_duration`: derived from `last_active_at - started_at`. Our job:
-  keep bumping `last_active_at` on every event (already in foundations 0.2).
-- `page_views`: bumped in `recordNavigation` for `initial` / `push` / `replace`.
-  Our job: emit those accurately from the navigation tracker.
+The backend computes these over **visits**: human (non-bot) sessions with
+at least one page view.
+
+- `bounce_rate`: visits with exactly one page view. Our job: make sure the
+  **initial** navigation event always fires.
+- `avg_duration`: from the session start to its last engagement signal (page
+  views, vitals, dead/rage clicks, custom events) on the client clock. Our
+  job: send accurate client timestamps; background events are not engagement.
+- `page_views`: page loads plus history changes that change the pathname.
+  Our job: emit exactly those from the navigation tracker.
+- Nothing is sent while a page is being prerendered; the queue is held until
+  the page is shown (`prerenderingchange`) or dropped if it never is.
 
 No new endpoints — just verify these three signals stay honest once the
 above features are wired.
@@ -293,12 +337,18 @@ DOM serializer. Records a full snapshot on start, then incremental mutations.
      than `now - 60_000ms`.
 3. Store the ring buffer in **IndexedDB** (not memory alone) so it
    survives soft navigations and doesn't balloon the JS heap.
-   - DB name: `reliable_replay`, object store: `events`.
+   - DB name: `reliable_replay_v2`, object store: `events`, indexed by
+     `timestamp` (pruning) and `[tab, timestamp]` (reads).
+   - **Per tab**: every event is stored with the recording tab's id (kept
+     in `sessionStorage`, so it survives reloads of that tab), and a flush
+     reads only its own tab. The database is shared by every tab of the
+     site, so without this two open tabs mixed into one replay.
    - Write in batches (every 500ms or 50 events, whichever comes first)
      to reduce IDB write pressure.
    - On prune, delete old entries by timestamp index.
-4. **Trigger flush** — when the error module or any notable event fires:
-   - Read the full 60s window from IndexedDB.
+4. **Trigger flush** — when the error module or any notable event fires,
+   and only for sampled sessions:
+   - Read this tab's 60s window from IndexedDB.
    - Compress with `pako` (gzip) to keep payload size sane.
    - POST to `/ingest/replays` with `{ session_uuid, trigger_event_uuid,
      started_at, ended_at, snapshot_count, compressed_events (base64) }`.

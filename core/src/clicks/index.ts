@@ -1,150 +1,223 @@
-// Click capture — dead clicks and rage clicks.
+// Click capture: dead clicks and rage clicks.
 //
-// A single document-level click listener in capture phase sees every click
-// before framework handlers. Two heuristics run on top:
+// Only elements whose job is to act when clicked are judged: links, buttons
+// and elements with a button, link, menu item or tab role. Up to 1.4.x any
+// interactive element counted, so clicking into a text field, checkbox or
+// select (which focuses it without changing the DOM) was a "dead click";
+// about half of all dead clicks in production were fields and iframes.
 //
-//   Rage click  — 3+ clicks on the same selector within 1000ms.
-//   Dead click  — click on an interactive element with no DOM mutation,
-//                 navigation, or fetch within 300ms.
+// A click, or a burst of rapid clicks on the same element, is dead when
+// nothing responds within RESPONSE_WINDOW_MS of the last click: no DOM change
+// anywhere in the document, no URL change, no scroll, no focus moving to
+// another element or window, and no network request starting. Up to 1.4.x
+// only the clicked element's parent was watched, so a link that re-rendered
+// the page elsewhere, or a button that opened a modal at the root, was
+// wrongly dead.
 //
-// Only dead and rage clicks are reported — normal clicks are not sent.
+// A burst of RAGE_THRESHOLD or more dead clicks on the same element is one
+// rage click (reported instead of the individual dead clicks). Rapid clicks
+// that do get a response are never reported: triple-clicking text to select
+// it, or pressing a working +/- stepper quickly, is not rage.
+//
+// Only dead and rage clicks are sent as events. Every click also goes into
+// the breadcrumb buffer (attached to errors), so an error report shows what
+// the user clicked just before it.
+//
+// Privacy: no click ever carries the element's text. Button and link labels
+// can hold personal data ("Pay Jane Doe", an email, an order number); up to
+// 1.4.x dead and rage clicks sent up to 80 characters of it. Selectors are
+// scrubbed too: emails removed, ids and long numbers collapsed.
 
 import type { SdkContext } from '../context';
+import { networkStartedSince } from '../activity';
 import { getCurrentPath } from '../navigation';
 import { triggerReplayFlush } from '../replay';
+import { scrubSelector } from '../scrub';
 import { uuid } from '../util/uuid';
 import { nowIso } from '../util/now';
 
-let teardown: (() => void) | null = null;
-
-// ── rage detection state ────────────────────────────────────────────────
-interface ClickRecord {
-    selector: string;
-    time: number;
-}
-
-const RAGE_WINDOW_MS = 1_000;
+const RESPONSE_WINDOW_MS = 1_000;
+/** Clicks on the same element this close together belong to one burst. */
+const BURST_GAP_MS = 1_000;
 const RAGE_THRESHOLD = 3;
-const DEAD_WAIT_MS = 300;
 
-// Interactive elements that can be "dead clicked".
-const INTERACTIVE_TAGS = new Set([
-    'A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'LABEL', 'SUMMARY',
-]);
+const ACTION_SELECTOR = [
+    'a[href]',
+    'button',
+    'input[type="button"]', 'input[type="submit"]', 'input[type="reset"]', 'input[type="image"]',
+    'summary',
+    '[role="button"]', '[role="link"]', '[role="menuitem"]', '[role="tab"]',
+].join(', ');
 
-function isInteractive(el: Element): boolean {
-    if (INTERACTIVE_TAGS.has(el.tagName)) return true;
-    if (el.getAttribute('role') === 'button') return true;
-    if (el.hasAttribute('onclick')) return true;
-    if ((el as HTMLElement).tabIndex >= 0 && el.tagName !== 'BODY') return true;
-    return false;
+interface Burst {
+    el: Element;
+    selector: string;
+    count: number;
+    firstAt: number;      // performance.now() of the first click
+    lastAt: number;
+    href: string;         // location.href at the first click
+    focused: Element | null;
+    x: number;
+    y: number;
+    timer: ReturnType<typeof setTimeout> | null;
 }
+
+let teardown: (() => void) | null = null;
 
 export function initClicks(ctx: SdkContext): void {
     if (teardown) return;
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-    const { capture, logger } = ctx;
-    const recentClicks: ClickRecord[] = [];
-    const rageCooldowns = new Map<string, number>();
-    const RAGE_COOLDOWN_MS = 3_000;
+    const { capture, logger, breadcrumbs } = ctx;
+    const bursts = new Map<Element, Burst>();
 
-    function sendClick(
-        kind: 'dead' | 'rage',
-        target: Element,
-        selector: string,
-        x: number,
-        y: number,
-        rageCount?: number,
-    ): void {
+    // ── response signals (only watched while a burst is pending) ────────
+    let lastMutationAt = Number.NEGATIVE_INFINITY;
+    let lastScrollAt = Number.NEGATIVE_INFINITY;
+    let lastBlurAt = Number.NEGATIVE_INFINITY;
+    let observing = false;
+    const observer = typeof MutationObserver !== 'undefined'
+        ? new MutationObserver(() => { lastMutationAt = performance.now(); })
+        : null;
+    const onScroll = (): void => { lastScrollAt = performance.now(); };
+    const onBlur = (): void => { lastBlurAt = performance.now(); };
+
+    function startWatching(): void {
+        if (observing) return;
+        observing = true;
+        observer?.observe(document.documentElement, {
+            childList: true, subtree: true, attributes: true, characterData: true,
+        });
+        window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+        window.addEventListener('blur', onBlur);
+    }
+
+    function stopWatching(): void {
+        if (!observing) return;
+        observing = false;
+        observer?.disconnect();
+        window.removeEventListener('scroll', onScroll, { capture: true } as EventListenerOptions);
+        window.removeEventListener('blur', onBlur);
+    }
+
+    function responded(b: Burst): boolean {
+        if (lastMutationAt >= b.firstAt) return true;
+        if (lastScrollAt >= b.firstAt) return true;
+        if (lastBlurAt >= b.firstAt) return true;
+        if (networkStartedSince(b.firstAt)) return true;
+        if (resourceStartedSince(b.firstAt)) return true;
+        if (location.href !== b.href) return true;
+        const active = document.activeElement;
+        if (active && active !== b.focused && active !== b.el && active !== document.body && !b.el.contains(active)) {
+            return true;
+        }
+        return false;
+    }
+
+    function sendClick(kind: 'dead' | 'rage', b: Burst, rageCount?: number): void {
         const path = getCurrentPath() || location.pathname;
         const eventUuid = uuid();
 
         capture('/clicks', {
             uuid: eventUuid,
             kind,
-            element_selector: selector,
-            element_text: truncate(target.textContent?.trim() ?? '', 80),
-            element_tag: target.tagName.toLowerCase(),
+            element_selector: b.selector,
+            element_tag: b.el.tagName.toLowerCase(),
             rage_click_count: rageCount ?? null,
-            coordinate_x: Math.round(x),
-            coordinate_y: Math.round(y),
+            coordinate_x: Math.round(b.x),
+            coordinate_y: Math.round(b.y),
             path,
             occurred_at: nowIso(),
         });
 
         triggerReplayFlush(ctx, eventUuid);
-        logger.debug('click', kind, selector);
+        logger.debug('click', kind, b.selector);
+    }
+
+    function evaluate(b: Burst): void {
+        b.timer = null;
+        bursts.delete(b.el);
+        const dead = !responded(b);
+        if (bursts.size === 0) stopWatching();
+        if (!dead) return;
+
+        if (b.count >= RAGE_THRESHOLD) {
+            sendClick('rage', b, b.count);
+        } else {
+            for (let i = 0; i < b.count; i++) sendClick('dead', b);
+        }
     }
 
     // ── main listener ───────────────────────────────────────────────────
 
     function onClick(event: MouseEvent): void {
+        if (event.button !== 0) return;
         const target = event.target as Element | null;
-        if (!target) return;
+        if (!target || typeof target.closest !== 'function') return;
+        const el = target.closest(ACTION_SELECTOR);
 
-        const selector = compactSelector(target);
-        const now = Date.now();
-        const x = event.clientX;
-        const y = event.clientY;
-
-        // ── rage detection ──────────────────────────────────────────────
-        recentClicks.push({ selector, time: now });
-        // Prune old entries.
-        while (recentClicks.length > 0 && now - recentClicks[0]!.time > RAGE_WINDOW_MS) {
-            recentClicks.shift();
-        }
-        const sameCount = recentClicks.filter((c) => c.selector === selector).length;
-        if (sameCount >= RAGE_THRESHOLD) {
-            const lastRage = rageCooldowns.get(selector);
-            if (!lastRage || now - lastRage > RAGE_COOLDOWN_MS) {
-                sendClick('rage', target, selector, x, y, sameCount);
-                rageCooldowns.set(selector, now);
-            }
-            recentClicks.length = 0;
-            return;
-        }
-
-        // ── dead click detection ────────────────────────────────────────
-        // Only check interactive elements.
-        const interactive = findInteractive(target);
-        if (!interactive) return;
-
-        let alive = false;
-
-        // Watch for DOM mutations near the target.
-        const observer = new MutationObserver(() => { alive = true; });
-        const observeRoot = interactive.parentElement ?? document.body;
-        observer.observe(observeRoot, {
-            childList: true,
-            subtree: true,
-            attributes: true,
+        // Breadcrumb for every click: what was clicked, never its text.
+        const crumbEl = el ?? target;
+        const crumbSelector = compactSelector(crumbEl);
+        breadcrumbs.add({
+            category: 'click',
+            message: crumbSelector,
+            data: {
+                tag: crumbEl.tagName.toLowerCase(),
+                selector: crumbSelector,
+                x: Math.round(event.clientX),
+                y: Math.round(event.clientY),
+            },
         });
 
-        // Watch for fetch/XHR starting (sign of life).
-        const origFetch = window.fetch;
-        // Use a one-shot flag — we just want to know if ANY fetch starts.
-        const fetchGuard = (...args: Parameters<typeof fetch>): Promise<Response> => {
-            alive = true;
-            window.fetch = origFetch;
-            return origFetch.apply(window, args);
-        };
-        window.fetch = fetchGuard;
+        // Dead/rage judging: no modifier (ctrl/cmd/shift/alt clicks open new
+        // tabs or windows, or download, which never change this page).
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        if (!el || opensElsewhere(el)) return;
 
-        setTimeout(() => {
-            observer.disconnect();
-            if (window.fetch === fetchGuard) window.fetch = origFetch;
+        const t = performance.now();
+        let b = bursts.get(el);
+        if (b && t - b.lastAt <= BURST_GAP_MS) {
+            b.count++;
+            b.lastAt = t;
+            b.x = event.clientX;
+            b.y = event.clientY;
+            if (b.timer) clearTimeout(b.timer);
+        } else {
+            b = {
+                el,
+                selector: compactSelector(el),
+                count: 1,
+                firstAt: t,
+                lastAt: t,
+                href: location.href,
+                focused: document.activeElement,
+                x: event.clientX,
+                y: event.clientY,
+                timer: null,
+            };
+            bursts.set(el, b);
+        }
 
-            if (!alive) {
-                sendClick('dead', interactive, compactSelector(interactive), x, y);
-            }
-        }, DEAD_WAIT_MS);
+        startWatching();
+        const burst = b;
+        burst.timer = setTimeout(() => evaluate(burst), RESPONSE_WINDOW_MS);
+    }
+
+    // Leaving the page is a response: drop whatever is still pending.
+    function onPageHide(): void {
+        for (const b of bursts.values()) if (b.timer) clearTimeout(b.timer);
+        bursts.clear();
+        stopWatching();
     }
 
     document.addEventListener('click', onClick, true);
+    window.addEventListener('pagehide', onPageHide);
 
     teardown = () => {
         document.removeEventListener('click', onClick, true);
+        window.removeEventListener('pagehide', onPageHide);
+        onPageHide();
         teardown = null;
     };
 
@@ -157,19 +230,35 @@ export function destroyClicks(): void {
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
-/** Walk up to find the nearest interactive ancestor (or self). */
-function findInteractive(el: Element): Element | null {
-    let cur: Element | null = el;
-    for (let i = 0; i < 5 && cur; i++) {
-        if (isInteractive(cur)) return cur;
-        cur = cur.parentElement;
+/** Links that by design do not change this page: new tab, download, mail/phone apps. */
+function opensElsewhere(el: Element): boolean {
+    if (el.tagName !== 'A') return false;
+    const a = el as HTMLAnchorElement;
+    if (a.hasAttribute('download')) return true;
+    const target = (a.getAttribute('target') || '').toLowerCase();
+    if (target && target !== '_self' && target !== '_top' && target !== '_parent') return true;
+    return /^(mailto|tel|sms):/i.test(a.getAttribute('href') || '');
+}
+
+/** Fallback for when network capture is off: a completed resource entry that
+ *  started after the click (fetch, XHR, image) is a response too. */
+function resourceStartedSince(perfTime: number): boolean {
+    try {
+        const entries = performance.getEntriesByType('resource');
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const e = entries[i]!;
+            if (e.startTime >= perfTime) return true;
+            if (e.startTime < perfTime - 60_000) break;
+        }
+    } catch {
+        // Resource timing unavailable.
     }
-    return null;
+    return false;
 }
 
 /**
  * Build a compact CSS selector: tag#id or tag.class1.class2, walking up
- * max 3 ancestors. Capped at 200 chars.
+ * max 3 ancestors, scrubbed (see scrubSelector). Capped at 200 chars.
  */
 function compactSelector(el: Element): string {
     const parts: string[] = [];
@@ -186,10 +275,6 @@ function compactSelector(el: Element): string {
         cur = cur.parentElement;
     }
 
-    const selector = parts.join(' > ');
+    const selector = scrubSelector(parts.join(' > '));
     return selector.length > 200 ? selector.slice(0, 200) : selector;
-}
-
-function truncate(s: string, max: number): string {
-    return s.length > max ? s.slice(0, max) + '...' : s;
 }

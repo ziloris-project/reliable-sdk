@@ -3,7 +3,9 @@
 // patterns are deliberately conservative — false positives are better than
 // leaking credentials.
 
-const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+// Also matches the percent-encoded form (jane%40example.com), which is how
+// an email usually appears in a URL's query string.
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+(?:@|%40)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi;
 
 // 13-16 digit runs with optional spaces/dashes — catches most card PANs.
 const CC_RE = /\b(?:\d[ -]*?){13,19}\b/g;
@@ -30,6 +32,31 @@ const SENSITIVE_HEADERS = new Set([
 export function scrubString(input: string): string {
     if (!input) return input;
     return input.replace(EMAIL_RE, '[email]').replace(CC_RE, '[cc]');
+}
+
+/**
+ * A page path (pathname + query) safe to send: sensitive query params
+ * redacted, and emails or card-shaped numbers anywhere in it replaced. Every
+ * path the SDK reports goes through this (see navigation's getCurrentPath).
+ */
+export function scrubPath(path: string): string {
+    if (!path) return path;
+    // Scrub before and after: scrubUrl re-encodes the query string, so an
+    // email must be caught in whichever form it is in at each step.
+    return scrubString(scrubUrl(scrubString(path)));
+}
+
+/**
+ * A CSS-path-style selector safe to send and to group by: emails and card
+ * numbers removed, and UUIDs and long digit runs (user or record ids baked
+ * into element ids and classes) collapsed, so `button#delete-8231` and
+ * `button#delete-9912` are one element, not two.
+ */
+export function scrubSelector(selector: string): string {
+    if (!selector) return selector;
+    return scrubString(selector)
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id')
+        .replace(/\d{4,}/g, ':n');
 }
 
 /**

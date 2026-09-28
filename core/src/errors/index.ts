@@ -60,6 +60,11 @@ const API_TRIGGER_WINDOW_MS = 500;
 
 /** Window after page load in which errors are considered "page_load". */
 const PAGE_LOAD_WINDOW_MS = 2_000;
+// A click or route change only caused an error if it came just before it.
+// Clicks and navigations are recorded as breadcrumbs automatically, so
+// without this window an error ten minutes after the last click would still
+// be blamed on that click.
+const CRUMB_TRIGGER_WINDOW_MS = 1_000;
 
 /** Value truncation for browser_state entries — stops mega-tokens from bloating payloads. */
 const STATE_VALUE_MAX = 200;
@@ -324,8 +329,8 @@ function simpleHash(str: string): string {
 /** Decide what *caused* the error. Heuristics, in priority order:
  *   1. within PAGE_LOAD_WINDOW_MS of timeOrigin → page_load
  *   2. a network event finished within API_TRIGGER_WINDOW_MS → api_response
- *   3. last breadcrumb is a route change → navigation
- *   4. last breadcrumb is a click → click
+ *   3. a route change breadcrumb within CRUMB_TRIGGER_WINDOW_MS → navigation
+ *   4. a click breadcrumb within CRUMB_TRIGGER_WINDOW_MS → click
  *   5. otherwise → timer (setTimeout / setInterval leftovers) or unknown
  */
 function classifyTrigger(
@@ -338,6 +343,8 @@ function classifyTrigger(
 
     for (let i = crumbs.length - 1; i >= 0; i--) {
         const c = crumbs[i]!;
+        const at = Date.parse(c.timestamp);
+        if (Number.isFinite(at) && nowMs - at > CRUMB_TRIGGER_WINDOW_MS) break;
         if (c.category === 'navigation') return 'navigation';
         if (c.category === 'click')      return 'click';
     }

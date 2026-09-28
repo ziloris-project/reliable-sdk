@@ -20,15 +20,19 @@
 import type { SdkContext } from '../context';
 import { uuid } from '../util/uuid';
 import { nowIso } from '../util/now';
+import { scrubPath } from '../scrub';
 
 type NavKind = 'initial' | 'push' | 'replace' | 'pop' | 'reload';
 
 let teardown: (() => void) | null = null;
 
-/** Current path, tracked so every module can read it without querying location. */
+/** Current path, tracked so every module can read it without querying location.
+ *  Always scrubbed: sensitive query params redacted, emails removed. Up to
+ *  1.4.x it was the raw pathname + query, so a link like
+ *  /reset?token=...&email=... was stored as-is with every event on the page. */
 let _currentPath: string = '';
 
-/** Read the current tracked path. Other modules (vitals, errors, network, clicks) use this. */
+/** Read the current tracked path (scrubbed). Other modules (vitals, errors, network, clicks) use this. */
 export function getCurrentPath(): string {
     return _currentPath;
 }
@@ -58,20 +62,27 @@ export function initNavigation(ctx: SdkContext): void {
     if (teardown) return; // already wired
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-    const { capture, logger } = ctx;
+    const { capture, logger, breadcrumbs } = ctx;
 
     // ── helpers ──────────────────────────────────────────────────────────
 
-    function emitNav(kind: NavKind, fromPath: string | null, toPath: string): void {
+    function emitNav(kind: NavKind, rawFrom: string | null, rawTo: string): void {
+        const fromPath = rawFrom === null ? null : scrubPath(rawFrom);
+        const toPath = scrubPath(rawTo);
         _currentPath = toPath;
         pushRouterHistory(toPath);
+        breadcrumbs.add({
+            category: 'navigation',
+            message: `${fromPath ?? '(page load)'} -> ${toPath}`,
+            data: { from: fromPath, to: toPath, kind },
+        });
         logger.debug('nav', kind, fromPath, '→', toPath);
         capture('/navigation', {
             uuid: uuid(),
             kind,
             from_path: fromPath,
             to_path: toPath,
-            referrer: kind === 'initial' ? (document.referrer || null) : null,
+            referrer: kind === 'initial' && document.referrer ? scrubPath(document.referrer) : null,
             occurred_at: nowIso(),
         });
     }
@@ -84,13 +95,17 @@ export function initNavigation(ctx: SdkContext): void {
      *  only keep the tracked path current. */
     function onUrlChange(kind: 'push' | 'replace' | 'pop', from: string, to: string): void {
         if (to === from) return;
+        lastRawPath = to;
         if (pathOnly(to) !== pathOnly(from)) emitNav(kind, from, to);
-        else _currentPath = to;
+        else _currentPath = scrubPath(to);
     }
 
     // ── initial navigation ──────────────────────────────────────────────
 
     const initialPath = currentPathname();
+    // The raw URL of the last change, kept only for comparisons: what other
+    // modules read is the scrubbed _currentPath.
+    let lastRawPath = initialPath;
     const isReload = detectReload();
     emitNav(isReload ? 'reload' : 'initial', null, initialPath);
 
@@ -118,7 +133,7 @@ export function initNavigation(ctx: SdkContext): void {
     // ── popstate (back / forward) ───────────────────────────────────────
 
     function onPopState(): void {
-        onUrlChange('pop', _currentPath, currentPathname());
+        onUrlChange('pop', lastRawPath, currentPathname());
     }
 
     window.addEventListener('popstate', onPopState);

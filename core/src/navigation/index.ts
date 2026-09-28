@@ -9,6 +9,13 @@
 //
 // The module monkey-patches history.pushState and history.replaceState,
 // and listens for popstate. It restores originals on teardown.
+//
+// A history change is only reported (as a page view) when the pathname
+// changes. Rewriting just the query string, as search boxes, filters and
+// pagination do on every keystroke or click, keeps the visitor on the same
+// page; up to 1.4.x each rewrite counted as another page view. The tracked
+// current path still follows the full URL, so errors and vitals report the
+// exact URL they happened on.
 
 import type { SdkContext } from '../context';
 import { uuid } from '../util/uuid';
@@ -73,6 +80,14 @@ export function initNavigation(ctx: SdkContext): void {
         return location.pathname + location.search;
     }
 
+    /** Record a URL change: a page view when the pathname changed, otherwise
+     *  only keep the tracked path current. */
+    function onUrlChange(kind: 'push' | 'replace' | 'pop', from: string, to: string): void {
+        if (to === from) return;
+        if (pathOnly(to) !== pathOnly(from)) emitNav(kind, from, to);
+        else _currentPath = to;
+    }
+
     // ── initial navigation ──────────────────────────────────────────────
 
     const initialPath = currentPathname();
@@ -89,8 +104,7 @@ export function initNavigation(ctx: SdkContext): void {
     ) {
         const from = currentPathname();
         origPush(data, unused, url);
-        const to = currentPathname();
-        if (to !== from) emitNav('push', from, to);
+        onUrlChange('push', from, currentPathname());
     };
 
     history.replaceState = function patchedReplace(
@@ -98,17 +112,13 @@ export function initNavigation(ctx: SdkContext): void {
     ) {
         const from = currentPathname();
         origReplace(data, unused, url);
-        const to = currentPathname();
-        if (to !== from) emitNav('replace', from, to);
+        onUrlChange('replace', from, currentPathname());
     };
 
     // ── popstate (back / forward) ───────────────────────────────────────
 
     function onPopState(): void {
-        const to = currentPathname();
-        if (to !== _currentPath) {
-            emitNav('pop', _currentPath, to);
-        }
+        onUrlChange('pop', _currentPath, currentPathname());
     }
 
     window.addEventListener('popstate', onPopState);
@@ -128,6 +138,11 @@ export function destroyNavigation(): void {
 }
 
 // ── private ─────────────────────────────────────────────────────────────
+
+function pathOnly(path: string): string {
+    const q = path.indexOf('?');
+    return q === -1 ? path : path.slice(0, q);
+}
 
 function detectReload(): boolean {
     try {

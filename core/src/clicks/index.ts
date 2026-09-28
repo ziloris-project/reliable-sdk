@@ -19,12 +19,20 @@
 // that do get a response are never reported: triple-clicking text to select
 // it, or pressing a working +/- stepper quickly, is not rage.
 //
-// Only dead and rage clicks are reported; normal clicks are not sent.
+// Only dead and rage clicks are sent as events. Every click also goes into
+// the breadcrumb buffer (attached to errors), so an error report shows what
+// the user clicked just before it.
+//
+// Privacy: no click ever carries the element's text. Button and link labels
+// can hold personal data ("Pay Jane Doe", an email, an order number); up to
+// 1.4.x dead and rage clicks sent up to 80 characters of it. Selectors are
+// scrubbed too: emails removed, ids and long numbers collapsed.
 
 import type { SdkContext } from '../context';
 import { networkStartedSince } from '../activity';
 import { getCurrentPath } from '../navigation';
 import { triggerReplayFlush } from '../replay';
+import { scrubSelector } from '../scrub';
 import { uuid } from '../util/uuid';
 import { nowIso } from '../util/now';
 
@@ -60,7 +68,7 @@ export function initClicks(ctx: SdkContext): void {
     if (teardown) return;
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-    const { capture, logger } = ctx;
+    const { capture, logger, breadcrumbs } = ctx;
     const bursts = new Map<Element, Burst>();
 
     // ── response signals (only watched while a burst is pending) ────────
@@ -114,7 +122,6 @@ export function initClicks(ctx: SdkContext): void {
             uuid: eventUuid,
             kind,
             element_selector: b.selector,
-            element_text: truncate(b.el.textContent?.trim() ?? '', 80),
             element_tag: b.el.tagName.toLowerCase(),
             rage_click_count: rageCount ?? null,
             coordinate_x: Math.round(b.x),
@@ -144,12 +151,28 @@ export function initClicks(ctx: SdkContext): void {
     // ── main listener ───────────────────────────────────────────────────
 
     function onClick(event: MouseEvent): void {
-        // Primary button only, and no modifier: ctrl/cmd/shift/alt clicks open
-        // new tabs or windows, or download, which never change this page.
-        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-
+        if (event.button !== 0) return;
         const target = event.target as Element | null;
-        const el = target?.closest?.(ACTION_SELECTOR) ?? null;
+        if (!target || typeof target.closest !== 'function') return;
+        const el = target.closest(ACTION_SELECTOR);
+
+        // Breadcrumb for every click: what was clicked, never its text.
+        const crumbEl = el ?? target;
+        const crumbSelector = compactSelector(crumbEl);
+        breadcrumbs.add({
+            category: 'click',
+            message: crumbSelector,
+            data: {
+                tag: crumbEl.tagName.toLowerCase(),
+                selector: crumbSelector,
+                x: Math.round(event.clientX),
+                y: Math.round(event.clientY),
+            },
+        });
+
+        // Dead/rage judging: no modifier (ctrl/cmd/shift/alt clicks open new
+        // tabs or windows, or download, which never change this page).
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
         if (!el || opensElsewhere(el)) return;
 
         const t = performance.now();
@@ -235,7 +258,7 @@ function resourceStartedSince(perfTime: number): boolean {
 
 /**
  * Build a compact CSS selector: tag#id or tag.class1.class2, walking up
- * max 3 ancestors. Capped at 200 chars.
+ * max 3 ancestors, scrubbed (see scrubSelector). Capped at 200 chars.
  */
 function compactSelector(el: Element): string {
     const parts: string[] = [];
@@ -252,10 +275,6 @@ function compactSelector(el: Element): string {
         cur = cur.parentElement;
     }
 
-    const selector = parts.join(' > ');
+    const selector = scrubSelector(parts.join(' > '));
     return selector.length > 200 ? selector.slice(0, 200) : selector;
-}
-
-function truncate(s: string, max: number): string {
-    return s.length > max ? s.slice(0, max) + '...' : s;
 }

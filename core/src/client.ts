@@ -22,6 +22,7 @@ import { initReplay } from './replay';
 import { initWebSocket } from './websocket';
 import { createLogger } from './util/log';
 import { isLikelyBot } from './util/bot';
+import { scrubPath } from './scrub';
 import { SDK_VERSION } from './version';
 import { nowIso } from './util/now';
 import { uuid } from './util/uuid';
@@ -45,12 +46,24 @@ const ACTIVITY_THROTTLE_MS = 10_000;
 /** document.referrer, but only when it is another site. A same-site referrer
  *  is this site linking to itself (typically a link opened in a new tab), not
  *  where the visit came from. */
+/** Loopback and localhost pages are a developer running the app, not a
+ *  visitor. Private network addresses are left alone: intranet apps serve
+ *  real users from them. */
+function isLocalDevHost(): boolean {
+    if (typeof location === 'undefined') return false;
+    if (location.protocol === 'file:') return true;
+    const h = location.hostname.toLowerCase();
+    return h === 'localhost' || h.endsWith('.localhost')
+        || h === '::1' || h === '[::1]' || h === '0.0.0.0'
+        || /^127\./.test(h);
+}
+
 function externalReferrer(): string | null {
     if (typeof document === 'undefined' || !document.referrer) return null;
     try {
         const ref = new URL(document.referrer);
         if (typeof location !== 'undefined' && ref.host === location.host) return null;
-        return document.referrer;
+        return scrubPath(document.referrer);
     } catch {
         return null;
     }
@@ -115,7 +128,10 @@ export function createClient(userConfig: ReliableConfig): InternalClient {
             viewport_height: vp?.height ?? null,
             initial_referrer: pageLoad ? externalReferrer() : null,
             initial_path:
-                typeof location !== 'undefined' ? location.pathname + location.search : null,
+                typeof location !== 'undefined' ? scrubPath(location.pathname + location.search) : null,
+            // Sessions from a developer's machine are marked so a production
+            // project can leave them out of its business metrics.
+            ...(isLocalDevHost() ? { environment: 'development' } : {}),
         });
     }
 

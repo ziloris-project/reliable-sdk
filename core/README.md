@@ -64,7 +64,7 @@ and the events will start landing within seconds.
 | `network` | ✅ on | `fetch` + `XHR` monkey-patch. Failures only by default; opt in to all requests with `captureAllRequests`. |
 | `clicks` | ✅ on | Every click becomes a breadcrumb. Dead and rage clicks on buttons and links are also sent as events. Both carry a scrubbed CSS-path-style selector and coordinates, never the element's text. Clicks that get a response (DOM change, navigation, scroll, focus change, request) are not dead. |
 | `navigation` | ✅ on | History and `popstate` listening; a page view per pathname change, and a breadcrumb per route change. Exposes `getCurrentPath()` (scrubbed) that other modules read. |
-| `replay` | ✅ on | rrweb session recording, kept separately per tab. Last 60 s + 10 s post-error flush. Sampled-out sessions upload nothing. |
+| `replay` | ✅ on | rrweb session recording, kept separately per tab. Uploads the last 60 s before an error (from the full-page snapshot before them, so 60 to 90 s) and extends it with the 10 s after. Inputs are masked; `data-rl-mask` masks text and `data-rl-block` leaves an element out. Sampled-out sessions upload nothing. |
 | `console` | ✅ on | `console.error` and `console.warn` surfaced as soft errors. The SDK's own logs are excluded. |
 | `websocket` | ✅ on | One row per WebSocket connection: open / close / reconnect storms / message and byte counts. Post-open errors flow into the errors pipeline. |
 | `breadcrumbs` | — | Ring buffer of the last 30 breadcrumbs (clicks, route changes and your own `addBreadcrumb` calls), attached to every error. |

@@ -90,8 +90,11 @@ export function initReplay(ctx: SdkContext): void {
         // buffer always holds one to replay a window from.
         checkoutEveryNms: CHECKOUT_EVERY_MS,
         maskAllInputs: true,
-        maskTextSelector: '[data-rl-mask]',
-        blockSelector: '[data-rl-block]',
+        // data-rl-* are the SDK's attributes. The dashboard docs told people
+        // to use data-rr-block (and data-rr-mask) instead, which did nothing:
+        // honor both, so anyone who followed the docs is actually protected.
+        maskTextSelector: '[data-rl-mask], [data-rr-mask]',
+        blockSelector: '[data-rl-block], [data-rr-block]',
         sampling: {
             mousemove: true,
             scroll: 150,

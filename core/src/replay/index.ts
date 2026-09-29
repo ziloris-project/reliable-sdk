@@ -1,17 +1,20 @@
-// Session replay — always-on DOM recording with 60s sliding window.
+// Session replay — always-on DOM recording with a sliding window.
 //
 // Records via rrweb, buffers in IndexedDB, flushes on error/click/network
-// events. After the initial 60s flush, continues recording for 10s
+// events. After the initial flush, continues recording for 10s
 // post-incident and PATCHes the chunk with the extended buffer.
 //
 // Flow:
-//   1. rrweb.record() streams DOM events into a memory batch
-//   2. Every 500ms, batch is written to IndexedDB + pruned to 60s window
+//   1. rrweb.record() streams DOM events into a memory batch, with a fresh
+//      full snapshot every 30s while the page changes (snapshots.ts)
+//   2. Every 500ms, batch is written to IndexedDB + pruned to RETAIN_MS
 //   3. On trigger (error, rage click, dead click, network failure):
-//      a. Read 60s from IDB → compress → POST /ingest/replays
+//      a. Read the last 60s from IDB, starting at the snapshot before them
+//         (so up to ~90s) → compress → POST /ingest/replays
 //      b. Start 10s post-incident timer
-//      c. After 10s → read extended window → compress → PATCH /ingest/replays/:uuid
-//   4. Visibility hidden → pause recording (no point capturing invisible tab)
+//      c. After 10s → read from the same snapshot to now → compress → PATCH /ingest/replays/:uuid
+//   4. Visibility hidden → pause recording (no point capturing invisible
+//      tab); visible again → fresh snapshot, since hidden changes were lost
 //
 // Replays are per tab: events are stored with this tab's id and a flush only
 // reads its own tab's events, so two open tabs never mix into one replay. The
@@ -23,6 +26,7 @@ import { record } from 'rrweb';
 import { deflate } from 'pako';
 import type { SdkContext } from '../context';
 import { writeEvents, pruneEvents, readEvents, type StoredEvent } from './idb';
+import { CHECKOUT_EVERY_MS, fromLastSnapshot, trimToSnapshot } from './snapshots';
 import { uuid } from '../util/uuid';
 
 const WINDOW_MS = 60_000;          // 60s pre-incident
@@ -30,6 +34,14 @@ const POST_INCIDENT_MS = 10_000;   // 10s after trigger
 const BATCH_INTERVAL_MS = 500;     // IDB write cadence
 const MIN_FLUSH_GAP_MS = 10_000;   // Don't flush same window twice within 10s
 const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024; // 5MB compressed limit
+
+// How far back a flush looks for the snapshot its window starts from, and
+// so how long events are kept: the window, the post-incident extension,
+// one checkout interval, and a margin. While a page changes, rrweb takes a
+// snapshot at most CHECKOUT_EVERY_MS after the last one, so any window with
+// events in it has a snapshot inside this horizon (see snapshots.ts).
+const LOOKBACK_MS = CHECKOUT_EVERY_MS + 10_000;
+const RETAIN_MS   = WINDOW_MS + POST_INCIDENT_MS + LOOKBACK_MS;
 
 const TAB_KEY = 'reliable:tab';
 
@@ -74,6 +86,9 @@ export function initReplay(ctx: SdkContext): void {
         errorHandler: (err) => {
             logger.debug('rrweb internal error (suppressed)', err);
         },
+        // A fresh full snapshot every 30s while the page changes, so the
+        // buffer always holds one to replay a window from.
+        checkoutEveryNms: CHECKOUT_EVERY_MS,
         maskAllInputs: true,
         maskTextSelector: '[data-rl-mask]',
         blockSelector: '[data-rl-block]',
@@ -91,7 +106,7 @@ export function initReplay(ctx: SdkContext): void {
         const batch = memBatch.splice(0);
         try {
             await writeEvents(batch);
-            await pruneEvents(Date.now() - WINDOW_MS - POST_INCIDENT_MS);
+            await pruneEvents(Date.now() - RETAIN_MS);
         } catch (err) {
             logger.debug('replay IDB write failed', err);
         }
@@ -100,21 +115,37 @@ export function initReplay(ctx: SdkContext): void {
     // ── Visibility pause/resume ─────────────────────────────────────────
 
     function onVisibility(): void {
-        recording = document.visibilityState === 'visible';
+        const visible = document.visibilityState === 'visible';
+        const resuming = visible && !recording;
+        recording = visible;
+        // Changes made while hidden were not stored, so later changes would
+        // refer to page state the recording never saw. Start again from a
+        // fresh snapshot.
+        if (resuming) takeSnapshot();
+    }
+
+    function takeSnapshot(): void {
+        try {
+            record.takeFullSnapshot(true);
+        } catch (err) {
+            logger.debug('replay snapshot failed', err);
+        }
     }
     document.addEventListener('visibilitychange', onVisibility);
 
     // ── Flush API ───────────────────────────────────────────────────────
 
-    async function compress(events: unknown[]): Promise<string> {
+    async function compress(events: unknown[]): Promise<string | null> {
         const json = JSON.stringify(events);
         const compressed = deflate(json);
 
         if (compressed.length > MAX_PAYLOAD_BYTES) {
+            // One event over the limit cannot be trimmed (this used to recurse
+            // forever on events.slice(0)).
+            if (events.length < 2) return null;
             logger.warn('replay payload exceeds 5MB, truncating');
-            // Truncate from the beginning (keep recent events).
-            const half = Math.floor(events.length / 2);
-            return compress(events.slice(half));
+            // Drop the older half, cutting at a snapshot so it still replays.
+            return compress(trimToSnapshot(events, Math.floor(events.length / 2)));
         }
 
         // Convert Uint8Array to base64.
@@ -143,16 +174,41 @@ export function initReplay(ctx: SdkContext): void {
         }
 
         const endTs = now;
-        const startTs = endTs - WINDOW_MS;
+        const windowStart = endTs - WINDOW_MS;
 
         try {
-            const events = await readEvents(tabId, startTs, endTs);
-            if (events.length === 0) {
-                logger.debug('replay flush skipped — no events in window');
+            // Start from the snapshot the window replays from (up to one
+            // checkout interval before it), never from mid-stream changes.
+            let slice = fromLastSnapshot(
+                await readEvents(tabId, windowStart - LOOKBACK_MS, endTs),
+                windowStart,
+            );
+            if (!slice) {
+                // Nothing stored since the last snapshot aged out, which means
+                // the page has not changed since: a snapshot taken now shows
+                // what the user was looking at. Not while hidden, where the
+                // page is not being recorded at all.
+                if (!recording) {
+                    logger.debug('replay flush skipped — tab hidden, no snapshot');
+                    return;
+                }
+                takeSnapshot();
+                const batch = memBatch.splice(0);
+                try { await writeEvents(batch); } catch {}
+                slice = fromLastSnapshot(await readEvents(tabId, endTs, Date.now()), Date.now());
+            }
+            if (!slice) {
+                logger.debug('replay flush skipped — no snapshot to replay from');
                 return;
             }
 
+            const startTs = slice[0]!.timestamp;
+            const events = slice.map((e) => e.data);
             const compressed = await compress(events);
+            if (!compressed) {
+                logger.warn('replay flush skipped — a single event exceeds 5MB');
+                return;
+            }
             const sess = session.current();
 
             const payload = {
@@ -205,10 +261,12 @@ export function initReplay(ctx: SdkContext): void {
 
             const endTs = Date.now();
             try {
-                const events = await readEvents(tabId, originalStartTs, endTs);
+                // From the same snapshot the initial upload started at.
+                const events = (await readEvents(tabId, originalStartTs, endTs)).map((e) => e.data);
                 if (events.length === 0) return;
 
                 const compressed = await compress(events);
+                if (!compressed) return;
 
                 const res = await fetch(`${config.endpoint}/replays/${pendingChunkUuid}`, {
                     method: 'PATCH',

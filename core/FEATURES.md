@@ -299,186 +299,100 @@ React component stack traces.
 
 ## 4. Session Replay
 
-Always-on DOM recording with a 60-second sliding window stored in IndexedDB.
-When an error or notable event fires, the SDK ships the buffered snapshots
-to the backend, which queues a video-processing job. The processor converts
-DOM/CSS snapshots into a playable video, uploads to R2, and links the video
-URL back to the originating event.
+Always-on DOM recording kept in IndexedDB. When an error or another notable
+event fires, the SDK uploads the recording of the moments before it. The
+backend stores it as is in R2, and the dashboard and the engineer app replay
+it in the viewer with `rrweb-player`. Nothing is rendered to video on the
+server (ADR 0006 in reliable-architecture has the history).
 
 ### 4.0 Architecture overview
 
 ```
-Browser (SDK)                   Backend                    Worker / Queue
-─────────────                   ───────                    ──────────────
-rrweb records DOM mutations     POST /ingest/replays       BullMQ job picks up
-  ↓                               ↓                         ↓
-60s ring buffer in IndexedDB    Store raw snapshot JSON    Headless browser renders
-  ↓                             in pg (or S3/R2 staging)   snapshots via rrweb-player
-On error/event → flush buffer     ↓                         ↓
-  → POST /ingest/replays        Enqueue video job          Encode to MP4/WebM
-                                  ↓                         ↓
-                                Job status tracked         Upload to R2
-                                in replay_jobs table         ↓
-                                  ↓                        PATCH replay_jobs
-                                Link video_url back        with video_url
-                                to error_events/sessions     ↓
-                                                           Update error_events
-                                                           with replay_url
+Browser (SDK)                        Backend                        Viewers
+─────────────                        ───────                        ───────
+rrweb records the page, with a       POST /ingest/replays           Dashboard: GET .../replays/:chunk/events
+full snapshot every 30s               ↓                               → DecompressionStream('deflate')
+  ↓                                  zlib blob → R2                   → rrweb-player
+IndexedDB, per tab, ~110s kept       replay-raw/{fp}/{session}/     Engineer app: GET /mobile/incidents/:uid/
+  ↓                                    {chunk}.gz                     replay/:chunk/events
+On error / rage or dead click /      replay_chunks row                → inflate in Dart → WebView
+failed request:                        (status 'pending')               → bundled rrweb-player
+  POST from the snapshot before       ↓
+  the last 60s                       PATCH /ingest/replays/:chunk
+  +10s: PATCH with the extended        replaces the blob
+  recording
 ```
 
-### 4.1 SDK — DOM recording + IndexedDB buffer
+### 4.1 SDK: recording and buffer
 
-**Library**: [`rrweb`](https://github.com/rrweb-io/rrweb) — battle-tested
-DOM serializer. Records a full snapshot on start, then incremental mutations.
+**Library**: [`rrweb`](https://github.com/rrweb-io/rrweb) 2.x.
 
-1. On `init`, if `capture_replay` is enabled, start `rrweb.record()`.
-2. Feed every rrweb event into a **60-second sliding-window ring buffer**.
-   - Each event has a timestamp. On every new event, prune entries older
-     than `now - 60_000ms`.
-3. Store the ring buffer in **IndexedDB** (not memory alone) so it
-   survives soft navigations and doesn't balloon the JS heap.
+1. On `init`, if `captureReplay` is enabled, start `rrweb.record()` with
+   `checkoutEveryNms: 30_000`: besides the snapshot at start, rrweb takes a
+   fresh full snapshot (Meta + FullSnapshot events) at most 30s after the
+   previous one while the page keeps changing. A replay can only start from
+   a snapshot; up to 1.5.0 there was just the one at page load, so errors
+   more than a minute into a visit uploaded changes with nothing to apply
+   them to (about 60% of production chunks replayed as a blank frame).
+2. Events are written to **IndexedDB** in batches every 500ms, then
+   everything older than ~110s (60s window + 10s post-incident + one 30s
+   snapshot interval + margin) is pruned.
    - DB name: `reliable_replay_v2`, object store: `events`, indexed by
      `timestamp` (pruning) and `[tab, timestamp]` (reads).
    - **Per tab**: every event is stored with the recording tab's id (kept
      in `sessionStorage`, so it survives reloads of that tab), and a flush
      reads only its own tab. The database is shared by every tab of the
      site, so without this two open tabs mixed into one replay.
-   - Write in batches (every 500ms or 50 events, whichever comes first)
-     to reduce IDB write pressure.
-   - On prune, delete old entries by timestamp index.
-4. **Trigger flush** — when the error module or any notable event fires,
-   and only for sampled sessions:
-   - Read this tab's 60s window from IndexedDB.
-   - Compress with `pako` (gzip) to keep payload size sane.
+3. **Trigger flush**: when the error, click or network module reports
+   something, and only for sampled sessions, and not within 10s of the
+   previous flush:
+   - Read this tab's events from the last snapshot at or before `now - 60s`
+     (so the chunk is 60-90s long and starts with a snapshot). If the page
+     has not changed for long enough that no snapshot is left, take one
+     now: the page looks the same as before.
+   - Compress with `pako.deflate` (zlib format).
    - POST to `/ingest/replays` with `{ session_uuid, trigger_event_uuid,
      started_at, ended_at, snapshot_count, compressed_events (base64) }`.
-   - Clear the sent range from IDB so it's not double-sent.
-5. **Size guard**: if the compressed payload exceeds 5MB, truncate oldest
-   events until it fits. Log a warning.
-6. **Privacy**: rrweb has built-in masking (`maskAllInputs: true`,
-   `maskTextSelector: '[data-rl-mask]'`). Enable by default, let
-   integrators customize via `init({ replayMaskSelector })`.
-7. **Performance budget**: rrweb's mutation observer is lightweight but
-   not free. If the page is in `hidden` state, pause recording (no
-   point capturing an invisible tab). Resume on `visibilitychange`.
+   - 10s later, PATCH `/ingest/replays/:chunk` with everything from the same
+     snapshot to now, so the chunk shows what happened right after too.
+     Closing the tab before then keeps the initial upload.
+4. **Size guard**: if the compressed payload exceeds 5MB, drop the older
+   half, cutting at a snapshot so it still replays. A single event over 5MB
+   is not uploaded.
+5. **Privacy**: `maskAllInputs: true` (every input value is recorded as
+   `*`). Page text is recorded as is except inside `[data-rl-mask]`, which
+   is masked, and `[data-rl-block]` elements are not recorded at all (an
+   empty box of the same size). `data-rr-mask` and `data-rr-block` work the
+   same (older docs used those names).
+6. **Performance**: while the page is hidden nothing is stored. When it
+   becomes visible again the SDK takes a fresh snapshot, because changes made
+   while hidden were not recorded.
 
-### 4.2 Backend — ingest endpoint + job queue
+### 4.2 Backend
 
-#### 4.2.1 Database schema
+- `POST /ingest/replays` (public key + origin check): uploads the blob to R2
+  under `replay-raw/{frontend_project_id}/{session_uuid}/{chunk_uuid}.gz`
+  (zlib despite the extension), inserts a `replay_chunks` row with
+  `status = 'pending'`, returns the chunk uuid.
+- `PATCH /ingest/replays/:chunkUuid`: replaces the blob with the extended
+  recording while the row is still `pending`.
+- `GET /projects/:projectId/frontend-projects/:uuid/replays/:chunkUuid/events`
+  (dashboard) and `GET /mobile/incidents/:uid/replay/:chunkUuid/events`
+  (engineer app) stream the stored bytes unchanged, scoped to the caller's
+  project. The server never decompresses a recording.
+- `replay_chunks.status` and `video_url` are kept for an optional later
+  processing step (videos, thumbnails). None runs today, so chunks stay
+  `pending`, and viewers never wait on them.
 
-```sql
--- Stores raw snapshot data and tracks processing status.
-CREATE TABLE replay_chunks (
-    id                 BIGSERIAL PRIMARY KEY,
-    uuid               UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-    frontend_project_id BIGINT NOT NULL REFERENCES frontend_projects(id),
-    session_id         BIGINT NOT NULL REFERENCES sessions(id),
-    trigger_event_uuid UUID,              -- the error/event that triggered this flush
-    started_at         TIMESTAMPTZ NOT NULL,
-    ended_at           TIMESTAMPTZ NOT NULL,
-    snapshot_count     INT NOT NULL,
-    compressed_size    INT NOT NULL,       -- bytes, for monitoring
-    raw_storage_key    TEXT,               -- R2 key for raw snapshot JSON (if offloaded)
-    video_url          TEXT,               -- R2 URL of the rendered video
-    status             TEXT NOT NULL DEFAULT 'pending'
-                       CHECK (status IN ('pending','processing','done','failed')),
-    error_message      TEXT,               -- failure reason if status = 'failed'
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at       TIMESTAMPTZ
-);
+### 4.3 Viewers
 
-CREATE INDEX idx_replay_chunks_session ON replay_chunks (session_id);
-CREATE INDEX idx_replay_chunks_status  ON replay_chunks (status) WHERE status = 'pending';
-```
-
-#### 4.2.2 Ingest endpoint
-
-- `POST /ingest/replays`
-- Auth: same `ingestAuth` middleware (public key + origin check).
-- Validate: `session_uuid`, `trigger_event_uuid`, `started_at`, `ended_at`,
-  `snapshot_count`, `compressed_events` (base64 string).
-- Steps:
-  1. Resolve `session_id` via `resolveSessionId`.
-  2. Upload the compressed blob to R2 staging bucket under
-     `raw/{frontend_project_id}/{session_uuid}/{chunk_uuid}.gz`.
-  3. INSERT into `replay_chunks` with `status = 'pending'`,
-     `raw_storage_key` pointing to the R2 object.
-  4. Enqueue a BullMQ job `{ chunk_uuid }` on the `replay-render` queue.
-  5. Return `202 { chunk_uuid }`.
-
-#### 4.2.3 Job queue (BullMQ + Redis)
-
-- Queue name: `replay-render`.
-- Job payload: `{ chunk_uuid }`.
-- Concurrency: configurable (start with 2 workers).
-- Retry: 3 attempts with exponential backoff.
-- On failure after retries: mark `replay_chunks.status = 'failed'`
-  with `error_message`.
-
-### 4.3 Video processor worker
-
-A standalone Node service (or same process, separate BullMQ worker).
-
-1. **Fetch raw data**: download `raw_storage_key` from R2, decompress.
-2. **Render**: spin up a headless browser (Puppeteer/Playwright),
-   load an HTML page with `rrweb-player`, feed the events, play at
-   real speed (or accelerated), capture via `page.screencast()` or
-   `page.video()`.
-   - Viewport: 1280x720 (configurable).
-   - Duration: the actual event window (up to 60s).
-3. **Encode**: output as MP4 (H.264, broad compatibility) or WebM.
-   If using Playwright `page.video()`, it outputs WebM natively.
-4. **Upload**: PUT the video to R2 production bucket under
-   `videos/{frontend_project_id}/{session_uuid}/{chunk_uuid}.mp4`.
-5. **Update DB**:
-   - `UPDATE replay_chunks SET status='done', video_url=..., processed_at=NOW()`
-   - If `trigger_event_uuid` is set, also:
-     `UPDATE error_events SET replay_url=... WHERE uuid=trigger_event_uuid`
-6. **Cleanup**: optionally delete the raw snapshot from R2 staging
-   after successful render (or keep for re-processing).
-
-### 4.4 Frontend — replay viewer
-
-1. Error detail page already exists. Add a "Replay" tab/section.
-2. If `error_events.replay_url` is set, render a `<video>` player
-   with the R2 URL. Simple HTML5 video — no custom player needed.
-3. If `replay_url` is null and a `replay_chunks` row exists with
-   `status = 'processing'`, show a "Rendering..." spinner.
-4. If `status = 'failed'`, show the error message with a "Retry" button
-   that re-enqueues the job.
-5. Session detail page: list all replay chunks for that session,
-   each with a video thumbnail / play button.
-
-### 4.5 R2 storage layout
-
-```
-reliable-replay-bucket/
-├── raw/                          # staging — raw compressed snapshots
-│   └── {project_id}/
-│       └── {session_uuid}/
-│           └── {chunk_uuid}.gz
-└── videos/                       # production — rendered videos
-    └── {project_id}/
-        └── {session_uuid}/
-            └── {chunk_uuid}.mp4
-```
-
-- Bucket lifecycle rule: delete `raw/` objects after 7 days (processed
-  or not — if processing failed after 7 days, re-ingest is needed).
-- Videos: no auto-delete. Retention follows the project's data retention
-  policy (future feature).
-
-### 4.6 Build order
-
-1. **SDK replay module** (4.1) — rrweb recording + IndexedDB buffer +
-   flush-on-error hook. Can be tested with the test harness before the
-   backend exists (just log the payload).
-2. **DB migration** — `replay_chunks` table + indexes.
-3. **Ingest endpoint** — `POST /ingest/replays` + R2 raw upload.
-4. **BullMQ queue setup** — Redis connection, queue definition, job
-   enqueue in the ingest handler.
-5. **Video processor worker** — headless browser render + R2 upload +
-   DB update. This is the hardest piece — test in isolation first.
-6. **Frontend viewer** — video player on error detail page.
-7. **End-to-end test** — throw an error in the test harness, verify
-   the full pipeline: SDK → ingest → queue → render → R2 → frontend.
+- **Dashboard** (error detail → Session replay): pressing play fetches the
+  events, inflates them with the browser's `DecompressionStream`, and mounts
+  `rrweb-player`, which rebuilds the page in a sandboxed iframe where none of
+  the recorded page's scripts run.
+- **Engineer app**: inflates in Dart (older iOS WebViews lack
+  `DecompressionStream`) and passes the JSON to a WebView running the same
+  player from bundled assets.
+- A chunk with no full snapshot (recorded by 1.5.0 or earlier, more than a
+  minute into a visit) cannot be replayed; both viewers say so instead of
+  showing a blank frame.

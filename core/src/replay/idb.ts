@@ -94,20 +94,20 @@ export async function pruneEvents(cutoff: number): Promise<void> {
 }
 
 /** Read one tab's events within [startTs, endTs], in time order. */
-export async function readEvents(tab: string, startTs: number, endTs: number): Promise<unknown[]> {
+export async function readEvents(tab: string, startTs: number, endTs: number): Promise<StoredEvent[]> {
     const db = await openDb();
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const idx = store.index('tab_time');
     const range = IDBKeyRange.bound([tab, startTs], [tab, endTs]);
-    const results: unknown[] = [];
+    const results: StoredEvent[] = [];
 
     return new Promise((resolve, reject) => {
         const req = idx.openCursor(range);
         req.onsuccess = () => {
             const cursor = req.result;
             if (cursor) {
-                results.push((cursor.value as StoredEvent).data);
+                results.push(cursor.value as StoredEvent);
                 cursor.continue();
             }
         };
